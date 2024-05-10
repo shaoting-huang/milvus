@@ -770,8 +770,8 @@ func (t *traceConfig) init(base *BaseTable) {
 		Key:     "trace.exporter",
 		Version: "2.3.0",
 		Doc: `trace exporter type, default is stdout,
-optional values: ['stdout', 'jaeger', 'otlp']`,
-		DefaultValue: "stdout",
+optional values: ['noop','stdout', 'jaeger', 'otlp']`,
+		DefaultValue: "noop",
 		Export:       true,
 	}
 	t.Exporter.Init(base.mgr)
@@ -2007,6 +2007,8 @@ type queryNodeConfig struct {
 	LazyLoadWaitTimeout                  ParamItem `refreshable:"true"`
 	LazyLoadRequestResourceTimeout       ParamItem `refreshable:"true"`
 	LazyLoadRequestResourceRetryInterval ParamItem `refreshable:"true"`
+	LazyLoadMaxRetryTimes                ParamItem `refreshable:"true"`
+	LazyLoadMaxEvictPerRetry             ParamItem `refreshable:"true"`
 
 	// chunk cache
 	ReadAheadPolicy     ParamItem `refreshable:"false"`
@@ -2274,6 +2276,24 @@ func (p *queryNodeConfig) init(base *BaseTable) {
 		Export:       true,
 	}
 	p.LazyLoadRequestResourceRetryInterval.Init(base.mgr)
+
+	p.LazyLoadMaxRetryTimes = ParamItem{
+		Key:          "queryNode.lazyLoadMaxRetryTimes",
+		Version:      "2.4.2",
+		DefaultValue: "1",
+		Doc:          "max retry times for lazy load, 1 by default",
+		Export:       true,
+	}
+	p.LazyLoadMaxRetryTimes.Init(base.mgr)
+
+	p.LazyLoadMaxEvictPerRetry = ParamItem{
+		Key:          "queryNode.lazyLoadMaxEvictPerRetry",
+		Version:      "2.4.2",
+		DefaultValue: "1",
+		Doc:          "max evict count for lazy load, 1 by default",
+		Export:       true,
+	}
+	p.LazyLoadMaxEvictPerRetry.Init(base.mgr)
 
 	p.ReadAheadPolicy = ParamItem{
 		Key:          "queryNode.cache.readAheadPolicy",
