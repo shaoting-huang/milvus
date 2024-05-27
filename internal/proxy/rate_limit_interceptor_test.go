@@ -50,6 +50,10 @@ func (l *limiterMock) Check(dbID int64, collectionIDToPartIDs map[int64][]int64,
 	return nil
 }
 
+func (l *limiterMock) Alloc(ctx context.Context, dbID int64, collectionIDToPartIDs map[int64][]int64, rt internalpb.RateType, n int) error {
+	return l.Check(dbID, collectionIDToPartIDs, rt, n)
+}
+
 func TestRateLimitInterceptor(t *testing.T) {
 	t.Run("test getRequestInfo", func(t *testing.T) {
 		mockCache := NewMockCache(t)
@@ -257,7 +261,7 @@ func TestRateLimitInterceptor(t *testing.T) {
 		assert.Error(t, err)
 
 		_, _, _, _, err = getRequestInfo(context.Background(), &milvuspb.CalcDistanceRequest{})
-		assert.Error(t, err)
+		assert.NoError(t, err)
 	})
 
 	t.Run("test getFailedResponse", func(t *testing.T) {
