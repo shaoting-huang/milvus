@@ -1216,6 +1216,7 @@ func (s *Server) WatchChannels(ctx context.Context, req *datapb.WatchChannelsReq
 		zap.Strings("channels", req.GetChannelNames()),
 	)
 	log.Info("receive watch channels request")
+	_, sp := otel.Tracer(typeutil.DataCoordRole).Start(ctx, "DataCoord-watchChannelResponse")
 	resp := &datapb.WatchChannelsResponse{
 		Status: merr.Success(),
 	}
@@ -1225,6 +1226,7 @@ func (s *Server) WatchChannels(ctx context.Context, req *datapb.WatchChannelsReq
 			Status: merr.Status(err),
 		}, nil
 	}
+	sp.End()
 	for _, channelName := range req.GetChannelNames() {
 		ch := &channelMeta{
 			Name:            channelName,
@@ -1245,6 +1247,7 @@ func (s *Server) WatchChannels(ctx context.Context, req *datapb.WatchChannelsReq
 			resp.Status = merr.Status(err)
 			return resp, nil
 		}
+		sp2.End()
 	}
 
 	return resp, nil
