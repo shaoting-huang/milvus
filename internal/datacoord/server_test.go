@@ -3055,6 +3055,9 @@ func newTestServer(t *testing.T, opts ...Option) *Server {
 	svr.rootCoordClientCreator = func(ctx context.Context) (types.RootCoordClient, error) {
 		return newMockRootCoordClient(), nil
 	}
+	for _, opt := range opts {
+		opt(svr)
+	}
 
 	for _, opt := range opts {
 		opt(svr)
