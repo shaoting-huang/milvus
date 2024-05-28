@@ -22,6 +22,8 @@ import (
 	"sync"
 
 	"github.com/cockroachdb/errors"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.uber.org/zap"
 	"golang.org/x/exp/maps"
 
@@ -631,6 +633,8 @@ func (mt *MetaTable) GetCollectionByIDWithMaxTs(ctx context.Context, collectionI
 }
 
 func (mt *MetaTable) ListAllAvailCollections(ctx context.Context) map[int64][]int64 {
+	ctx, sp := otel.Tracer(typeutil.RootCoordRole).Start(ctx, "ListAllAvailCollections")
+	defer sp.End()
 	mt.ddLock.RLock()
 	defer mt.ddLock.RUnlock()
 
@@ -638,7 +642,8 @@ func (mt *MetaTable) ListAllAvailCollections(ctx context.Context) map[int64][]in
 	for _, dbMeta := range mt.dbName2Meta {
 		ret[dbMeta.ID] = make([]int64, 0)
 	}
-
+	sp.AddEvent("dbName2Meta")
+	sp.SetAttributes(attribute.Int("dbName2Meta size", len(mt.dbName2Meta)))
 	for collID, collMeta := range mt.collID2Meta {
 		if !collMeta.Available() {
 			continue
@@ -650,7 +655,7 @@ func (mt *MetaTable) ListAllAvailCollections(ctx context.Context) map[int64][]in
 		}
 		ret[dbID] = append(ret[dbID], collID)
 	}
-
+	sp.SetAttributes(attribute.Int("collID2Meta", len(mt.collID2Meta)))
 	return ret
 }
 

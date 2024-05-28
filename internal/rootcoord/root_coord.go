@@ -28,6 +28,7 @@ import (
 	"github.com/samber/lo"
 	"github.com/tikv/client-go/v2/txnkv"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.opentelemetry.io/otel"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -965,6 +966,8 @@ func (c *Core) CreateCollection(ctx context.Context, in *milvuspb.CreateCollecti
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
 		return merr.Status(err), nil
 	}
+	ctx, sp := otel.Tracer(typeutil.RootCoordRole).Start(ctx, "RootCoord-CreateCollection")
+	defer sp.End()
 
 	metrics.RootCoordDDLReqCounter.WithLabelValues("CreateCollection", metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder("CreateCollection")

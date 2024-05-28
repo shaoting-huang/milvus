@@ -57,14 +57,13 @@ func InjectCtx(sc context.Context, properties map[string]string) {
 
 // MsgSpanFromCtx extracts the span from context.
 // And it will attach some default tags to the span.
-func MsgSpanFromCtx(ctx context.Context, msg TsMsg) (context.Context, trace.Span) {
+func MsgSpanFromCtx(ctx context.Context, msg TsMsg, operationName string) (context.Context, trace.Span) {
 	if ctx == nil {
 		return ctx, trace.SpanFromContext(ctx)
 	}
 	if !allowTrace(msg) {
 		return ctx, trace.SpanFromContext(ctx)
 	}
-	operationName := "SendMsg"
 	opts := trace.WithAttributes(
 		attribute.Int64("ID", msg.ID()),
 		attribute.String("Type", msg.Type().String()),

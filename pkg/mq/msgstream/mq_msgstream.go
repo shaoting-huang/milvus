@@ -306,22 +306,32 @@ func (ms *mqMsgStream) Produce(msgPack *MsgPack) error {
 	for k, v := range result {
 		channel := ms.producerChannels[k]
 		for i := 0; i < len(v.Msgs); i++ {
-			spanCtx, sp := MsgSpanFromCtx(v.Msgs[i].TraceCtx(), v.Msgs[i])
+			spanCtx, sp := MsgSpanFromCtx(v.Msgs[i].TraceCtx(), v.Msgs[i], "SendMsg")
 			defer sp.End()
 
+			_, sp2 := MsgSpanFromCtx(v.Msgs[i].TraceCtx(), v.Msgs[i], "ProduceMarshal")
 			mb, err := v.Msgs[i].Marshal(v.Msgs[i])
+			sp2.End()
+			sp.AddEvent("produce marshal")
 			if err != nil {
 				return err
 			}
 
+			_, sp3 := MsgSpanFromCtx(v.Msgs[i].TraceCtx(), v.Msgs[i], "ProduceConvertToByteArray")
 			m, err := convertToByteArray(mb)
+			sp3.End()
+			sp.AddEvent("produce convertToByteArray")
 			if err != nil {
 				return err
 			}
 
+			_, sp4 := MsgSpanFromCtx(v.Msgs[i].TraceCtx(), v.Msgs[i], "ProduceProducerMessage")
 			msg := &mqwrapper.ProducerMessage{Payload: m, Properties: map[string]string{}}
 			InjectCtx(spanCtx, msg.Properties)
+			sp4.End()
+			sp.AddEvent("produce ProducerMessage")
 
+			_, sp5 := MsgSpanFromCtx(v.Msgs[i].TraceCtx(), v.Msgs[i], "ProduceLock")
 			ms.producerLock.RLock()
 			if _, err := ms.producers[channel].Send(spanCtx, msg); err != nil {
 				ms.producerLock.RUnlock()
@@ -329,6 +339,8 @@ func (ms *mqMsgStream) Produce(msgPack *MsgPack) error {
 				return err
 			}
 			ms.producerLock.RUnlock()
+			sp5.End()
+			sp.AddEvent("produce RUnlock")
 		}
 	}
 	return nil
@@ -350,24 +362,40 @@ func (ms *mqMsgStream) Broadcast(msgPack *MsgPack) (map[string][]MessageID, erro
 		return ids, merr.ErrDenyProduceMsg
 	}
 	for _, v := range msgPack.Msgs {
-		spanCtx, sp := MsgSpanFromCtx(v.TraceCtx(), v)
+		spanCtx, sp := MsgSpanFromCtx(v.TraceCtx(), v, "BroadcastSendMsg")
 
+		_, sp2 := MsgSpanFromCtx(v.TraceCtx(), v, "BroadcastMarshal")
 		mb, err := v.Marshal(v)
+		sp2.End()
+		sp.AddEvent("broadcast marshal")
+
 		if err != nil {
 			return ids, err
 		}
 
+		_, sp3 := MsgSpanFromCtx(v.TraceCtx(), v, "BroadcastConvertToByteArray")
 		m, err := convertToByteArray(mb)
+		sp3.End()
+		sp.AddEvent("convertToByteArray")
 		if err != nil {
 			return ids, err
 		}
 
+		_, sp4 := MsgSpanFromCtx(v.TraceCtx(), v, "BroadcastProducerMessage")
 		msg := &mqwrapper.ProducerMessage{Payload: m, Properties: map[string]string{}}
 		InjectCtx(spanCtx, msg.Properties)
+		sp4.End()
+		sp.AddEvent("ProducerMessage")
 
+		_, sp5 := MsgSpanFromCtx(v.TraceCtx(), v, "BroadcastProducerLock")
 		ms.producerLock.Lock()
+		sp.AddEvent("producerlock")
+		sp5.End()
+		_, sp6 := MsgSpanFromCtx(v.TraceCtx(), v, "BroadcastProducerSend")
 		for channel, producer := range ms.producers {
+			_, sp7 := MsgSpanFromCtx(v.TraceCtx(), v, channel)
 			id, err := producer.Send(spanCtx, msg)
+			sp.AddEvent(channel)
 			if err != nil {
 				ms.producerLock.Unlock()
 				sp.RecordError(err)
@@ -375,8 +403,11 @@ func (ms *mqMsgStream) Broadcast(msgPack *MsgPack) (map[string][]MessageID, erro
 				return ids, err
 			}
 			ids[channel] = append(ids[channel], id)
+			sp7.End()
 		}
 		ms.producerLock.Unlock()
+		sp6.End()
+		sp.AddEvent("Unlock")
 		sp.End()
 	}
 	return ids, nil
