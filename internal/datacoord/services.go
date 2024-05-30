@@ -1228,6 +1228,7 @@ func (s *Server) WatchChannels(ctx context.Context, req *datapb.WatchChannelsReq
 	}
 	sp.End()
 	for _, channelName := range req.GetChannelNames() {
+		_, sp2 := otel.Tracer(typeutil.DataCoordRole).Start(ctx, "DataCoord-watchChannel")
 		ch := &channelMeta{
 			Name:            channelName,
 			CollectionID:    req.GetCollectionID(),
