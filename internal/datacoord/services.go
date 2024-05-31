@@ -26,6 +26,7 @@ import (
 	"github.com/cockroachdb/errors"
 	"github.com/samber/lo"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
@@ -1233,6 +1234,7 @@ func (s *Server) WatchChannels(ctx context.Context, req *datapb.WatchChannelsReq
 		zap.Strings("channels", req.GetChannelNames()),
 	)
 	log.Info("receive watch channels request")
+	_, sp := otel.Tracer(typeutil.DataCoordRole).Start(ctx, "DataCoord-watchChannelResponse")
 	resp := &datapb.WatchChannelsResponse{
 		Status: merr.Success(),
 	}
@@ -1242,7 +1244,10 @@ func (s *Server) WatchChannels(ctx context.Context, req *datapb.WatchChannelsReq
 			Status: merr.Status(err),
 		}, nil
 	}
+	sp.End()
 	for _, channelName := range req.GetChannelNames() {
+		_, sp2 := otel.Tracer(typeutil.DataCoordRole).Start(ctx, "DataCoord-watch")
+		sp2.SetAttributes(attribute.String("channelName", channelName))
 		ch := NewRWChannel(channelName, req.GetCollectionID(), req.GetStartPositions(), req.GetSchema(), req.GetCreateTimestamp())
 		err := s.channelManager.Watch(ctx, ch)
 		if err != nil {
@@ -1256,6 +1261,7 @@ func (s *Server) WatchChannels(ctx context.Context, req *datapb.WatchChannelsReq
 			resp.Status = merr.Status(err)
 			return resp, nil
 		}
+		sp2.End()
 	}
 
 	return resp, nil
