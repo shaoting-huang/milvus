@@ -23,6 +23,7 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"github.com/golang/protobuf/proto"
+	"go.opentelemetry.io/otel"
 	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
@@ -340,7 +341,10 @@ func (t *createCollectionTask) assignChannels() error {
 }
 
 func (t *createCollectionTask) Prepare(ctx context.Context) error {
+	ctx, sp := otel.Tracer(typeutil.RootCoordRole).Start(ctx, "CreateCollectionTask-prepare]")
+	defer sp.End()
 	db, err := t.core.meta.GetDatabaseByName(ctx, t.Req.GetDbName(), typeutil.MaxTimestamp)
+	sp.AddEvent("GetDatabaseByName")
 	if err != nil {
 		return err
 	}
@@ -349,12 +353,15 @@ func (t *createCollectionTask) Prepare(ctx context.Context) error {
 	if err := t.validate(); err != nil {
 		return err
 	}
+	sp.AddEvent("validate")
 
 	if err := t.prepareSchema(); err != nil {
 		return err
 	}
+	sp.AddEvent("prepareSchema")
 
 	t.assignShardsNum()
+	sp.AddEvent("assignShardsNum")
 
 	if err := t.assignCollectionID(); err != nil {
 		return err
@@ -418,6 +425,8 @@ func (t *createCollectionTask) getCreateTs() (uint64, error) {
 }
 
 func (t *createCollectionTask) Execute(ctx context.Context) error {
+	ctx, sp := otel.Tracer(typeutil.RootCoordRole).Start(ctx, "CreateCollectionTask-execute")
+	defer sp.End()
 	collID := t.collID
 	partIDs := t.partIDs
 	ts, err := t.getCreateTs()
@@ -429,6 +438,7 @@ func (t *createCollectionTask) Execute(ctx context.Context) error {
 	chanNames := t.channels.physicalChannels
 
 	startPositions, err := t.addChannelsAndGetStartPositions(ctx, ts)
+	sp.AddEvent("addChannelsAndGetStartPositions")
 	if err != nil {
 		// ugly here, since we must get start positions first.
 		t.core.chanTimeTick.removeDmlChannels(t.channels.physicalChannels...)
@@ -445,6 +455,7 @@ func (t *createCollectionTask) Execute(ctx context.Context) error {
 			State:                     pb.PartitionState_PartitionCreated,
 		}
 	}
+	sp.AddEvent("make partitions")
 
 	collInfo := model.Collection{
 		CollectionID:         collID,
@@ -469,8 +480,10 @@ func (t *createCollectionTask) Execute(ctx context.Context) error {
 	// if add collection successfully due to idempotency check. Some steps may be risky to be duplicate executed if they
 	// are not promised idempotent.
 	clone := collInfo.Clone()
+	sp.AddEvent("Clone")
 	// need double check in meta table if we can't promise the sequence execution.
 	existedCollInfo, err := t.core.meta.GetCollectionByName(ctx, t.Req.GetDbName(), t.Req.GetCollectionName(), typeutil.MaxTimestamp)
+	sp.AddEvent("getCollectionByName")
 	if err == nil {
 		equal := existedCollInfo.Equal(*clone)
 		if !equal {
