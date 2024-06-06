@@ -780,17 +780,18 @@ quotaAndLimits:
 
 trace:
   # trace exporter type, default is stdout,
-  # optional values: ['noop','stdout', 'jaeger', 'otlp']
-  exporter: noop
+  # optional values: ['stdout', 'jaeger', 'otlp']
+  exporter: jaeger
   # fraction of traceID based sampler,
   # optional values: [0, 1]
   # Fractions >= 1 will always sample. Fractions < 0 are treated as zero.
-  sampleFraction: 0
-  jaeger:
-    url:  # when exporter is jaeger should set the jaeger's URL
+  sampleFraction: 1
   otlp:
-    endpoint:  # example: "127.0.0.1:4318"
+    endpoint: # "127.0.0.1:4318"
     secure: true
+  jaeger:
+    url: "http://tempo-distributor.tempo:14268/api/traces"
+    # when exporter is jaeger should set the jaeger's URL
 
 #when using GPU indexing, Milvus will utilize a memory pool to avoid frequent memory allocation and deallocation.
 #here, you can set the size of the memory occupied by the memory pool, with the unit being MB.
