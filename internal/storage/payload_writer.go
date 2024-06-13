@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"fmt"
 	"math"
+	"reflect"
 	"sync"
 
 	"github.com/apache/arrow/go/v12/arrow"
@@ -84,70 +85,32 @@ func (w *NativePayloadWriter) AddDataToPayload(data interface{}, dim ...int) err
 }
 
 func (w *NativePayloadWriter) addScalarData(data interface{}) error {
-	switch w.dataType {
-	case schemapb.DataType_Bool:
-		val, ok := data.([]bool)
-		if !ok {
-			return errors.New("incorrect data type")
-		}
-		return w.AddBoolToPayload(val)
-	case schemapb.DataType_Int8:
-		val, ok := data.([]int8)
-		if !ok {
-			return errors.New("incorrect data type")
-		}
-		return w.AddInt8ToPayload(val)
-	case schemapb.DataType_Int16:
-		val, ok := data.([]int16)
-		if !ok {
-			return errors.New("incorrect data type")
-		}
-		return w.AddInt16ToPayload(val)
-	case schemapb.DataType_Int32:
-		val, ok := data.([]int32)
-		if !ok {
-			return errors.New("incorrect data type")
-		}
-		return w.AddInt32ToPayload(val)
-	case schemapb.DataType_Int64:
-		val, ok := data.([]int64)
-		if !ok {
-			return errors.New("incorrect data type")
-		}
-		return w.AddInt64ToPayload(val)
-	case schemapb.DataType_Float:
-		val, ok := data.([]float32)
-		if !ok {
-			return errors.New("incorrect data type")
-		}
-		return w.AddFloatToPayload(val)
-	case schemapb.DataType_Double:
-		val, ok := data.([]float64)
-		if !ok {
-			return errors.New("incorrect data type")
-		}
-		return w.AddDoubleToPayload(val)
-	case schemapb.DataType_String, schemapb.DataType_VarChar:
-		val, ok := data.(string)
-		if !ok {
-			return errors.New("incorrect data type")
-		}
-		return w.AddOneStringToPayload(val)
-	case schemapb.DataType_Array:
-		val, ok := data.(*schemapb.ScalarField)
-		if !ok {
-			return errors.New("incorrect data type")
-		}
-		return w.AddOneArrayToPayload(val)
-	case schemapb.DataType_JSON:
-		val, ok := data.([]byte)
-		if !ok {
-			return errors.New("incorrect data type")
-		}
-		return w.AddOneJSONToPayload(val)
-	default:
-		return errors.New("incorrect datatype")
+	scalarWriteMethods := map[schemapb.DataType]reflect.Value{
+		schemapb.DataType_Bool:    reflect.ValueOf(w).MethodByName("AddBoolToPayload"),
+		schemapb.DataType_Int8:    reflect.ValueOf(w).MethodByName("AddInt8ToPayload"),
+		schemapb.DataType_Int16:   reflect.ValueOf(w).MethodByName("AddInt16ToPayload"),
+		schemapb.DataType_Int32:   reflect.ValueOf(w).MethodByName("AddInt32ToPayload"),
+		schemapb.DataType_Int64:   reflect.ValueOf(w).MethodByName("AddInt64ToPayload"),
+		schemapb.DataType_Float:   reflect.ValueOf(w).MethodByName("AddFloatToPayload"),
+		schemapb.DataType_Double:  reflect.ValueOf(w).MethodByName("AddDoubleToPayload"),
+		schemapb.DataType_String:  reflect.ValueOf(w).MethodByName("AddOneStringToPayload"),
+		schemapb.DataType_VarChar: reflect.ValueOf(w).MethodByName("AddOneStringToPayload"),
+		schemapb.DataType_Array:   reflect.ValueOf(w).MethodByName("AddOneArrayToPayload"),
+		schemapb.DataType_JSON:    reflect.ValueOf(w).MethodByName("AddOneJSONToPayload"),
 	}
+	method, ok := scalarWriteMethods[w.dataType]
+	if !ok {
+		return errors.New("unsupported data type")
+	}
+	dataVal := reflect.ValueOf(data)
+	if dataVal.Kind() != reflect.Slice {
+		return errors.New("data is not a slice")
+	}
+	result := method.Call([]reflect.Value{dataVal})
+	if result[0].IsNil() {
+		return nil
+	}
+	return result[0].Interface().(error)
 }
 
 func (w *NativePayloadWriter) addVectorData(data interface{}, dim int) error {
