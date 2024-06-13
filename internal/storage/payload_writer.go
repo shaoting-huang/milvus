@@ -75,107 +75,118 @@ func NewPayloadWriter(colType schemapb.DataType, dim ...int) (PayloadWriterInter
 func (w *NativePayloadWriter) AddDataToPayload(data interface{}, dim ...int) error {
 	switch len(dim) {
 	case 0:
-		switch w.dataType {
-		case schemapb.DataType_Bool:
-			val, ok := data.([]bool)
-			if !ok {
-				return errors.New("incorrect data type")
-			}
-			return w.AddBoolToPayload(val)
-		case schemapb.DataType_Int8:
-			val, ok := data.([]int8)
-			if !ok {
-				return errors.New("incorrect data type")
-			}
-			return w.AddInt8ToPayload(val)
-		case schemapb.DataType_Int16:
-			val, ok := data.([]int16)
-			if !ok {
-				return errors.New("incorrect data type")
-			}
-			return w.AddInt16ToPayload(val)
-		case schemapb.DataType_Int32:
-			val, ok := data.([]int32)
-			if !ok {
-				return errors.New("incorrect data type")
-			}
-			return w.AddInt32ToPayload(val)
-		case schemapb.DataType_Int64:
-			val, ok := data.([]int64)
-			if !ok {
-				return errors.New("incorrect data type")
-			}
-			return w.AddInt64ToPayload(val)
-		case schemapb.DataType_Float:
-			val, ok := data.([]float32)
-			if !ok {
-				return errors.New("incorrect data type")
-			}
-			return w.AddFloatToPayload(val)
-		case schemapb.DataType_Double:
-			val, ok := data.([]float64)
-			if !ok {
-				return errors.New("incorrect data type")
-			}
-			return w.AddDoubleToPayload(val)
-		case schemapb.DataType_String, schemapb.DataType_VarChar:
-			val, ok := data.(string)
-			if !ok {
-				return errors.New("incorrect data type")
-			}
-			return w.AddOneStringToPayload(val)
-		case schemapb.DataType_Array:
-			val, ok := data.(*schemapb.ScalarField)
-			if !ok {
-				return errors.New("incorrect data type")
-			}
-			return w.AddOneArrayToPayload(val)
-		case schemapb.DataType_JSON:
-			val, ok := data.([]byte)
-			if !ok {
-				return errors.New("incorrect data type")
-			}
-			return w.AddOneJSONToPayload(val)
-		default:
-			return errors.New("incorrect datatype")
-		}
+		return w.addScalarData(data)
 	case 1:
-		switch w.dataType {
-		case schemapb.DataType_BinaryVector:
-			val, ok := data.([]byte)
-			if !ok {
-				return errors.New("incorrect data type")
-			}
-			return w.AddBinaryVectorToPayload(val, dim[0])
-		case schemapb.DataType_FloatVector:
-			val, ok := data.([]float32)
-			if !ok {
-				return errors.New("incorrect data type")
-			}
-			return w.AddFloatVectorToPayload(val, dim[0])
-		case schemapb.DataType_Float16Vector:
-			val, ok := data.([]byte)
-			if !ok {
-				return errors.New("incorrect data type")
-			}
-			return w.AddFloat16VectorToPayload(val, dim[0])
-		case schemapb.DataType_BFloat16Vector:
-			val, ok := data.([]byte)
-			if !ok {
-				return errors.New("incorrect data type")
-			}
-			return w.AddBFloat16VectorToPayload(val, dim[0])
-		case schemapb.DataType_SparseFloatVector:
-			val, ok := data.(*SparseFloatVectorFieldData)
-			if !ok {
-				return errors.New("incorrect data type")
-			}
-			return w.AddSparseFloatVectorToPayload(val)
-		default:
-			return errors.New("incorrect datatype")
-		}
+		return w.addVectorData(data, dim[0])
 	default:
 		return errors.New("incorrect input numbers")
+	}
+}
+
+func (w *NativePayloadWriter) addScalarData(data interface{}) error {
+	switch w.dataType {
+	case schemapb.DataType_Bool:
+		val, ok := data.([]bool)
+		if !ok {
+			return errors.New("incorrect data type")
+		}
+		return w.AddBoolToPayload(val)
+	case schemapb.DataType_Int8:
+		val, ok := data.([]int8)
+		if !ok {
+			return errors.New("incorrect data type")
+		}
+		return w.AddInt8ToPayload(val)
+	case schemapb.DataType_Int16:
+		val, ok := data.([]int16)
+		if !ok {
+			return errors.New("incorrect data type")
+		}
+		return w.AddInt16ToPayload(val)
+	case schemapb.DataType_Int32:
+		val, ok := data.([]int32)
+		if !ok {
+			return errors.New("incorrect data type")
+		}
+		return w.AddInt32ToPayload(val)
+	case schemapb.DataType_Int64:
+		val, ok := data.([]int64)
+		if !ok {
+			return errors.New("incorrect data type")
+		}
+		return w.AddInt64ToPayload(val)
+	case schemapb.DataType_Float:
+		val, ok := data.([]float32)
+		if !ok {
+			return errors.New("incorrect data type")
+		}
+		return w.AddFloatToPayload(val)
+	case schemapb.DataType_Double:
+		val, ok := data.([]float64)
+		if !ok {
+			return errors.New("incorrect data type")
+		}
+		return w.AddDoubleToPayload(val)
+	case schemapb.DataType_String, schemapb.DataType_VarChar:
+		val, ok := data.(string)
+		if !ok {
+			return errors.New("incorrect data type")
+		}
+		return w.AddOneStringToPayload(val)
+	case schemapb.DataType_Array:
+		val, ok := data.(*schemapb.ScalarField)
+		if !ok {
+			return errors.New("incorrect data type")
+		}
+		return w.AddOneArrayToPayload(val)
+	case schemapb.DataType_JSON:
+		val, ok := data.([]byte)
+		if !ok {
+			return errors.New("incorrect data type")
+		}
+		return w.AddOneJSONToPayload(val)
+	default:
+		return errors.New("incorrect datatype")
+	}
+}
+
+func (w *NativePayloadWriter) addVectorData(data interface{}, dim int) error {
+	if w.finished {
+		return errors.New(fmt.Sprintf("can't append data to finished int64 payload", w.dataType.String()))
+	}
+	switch w.dataType {
+	case schemapb.DataType_BinaryVector:
+		val, ok := data.([]byte)
+		if !ok {
+			return errors.New("incorrect data type")
+		}
+		return w.AddBinaryVectorToPayload(val, dim)
+	case schemapb.DataType_FloatVector:
+		val, ok := data.([]float32)
+		if !ok {
+			return errors.New("incorrect data type")
+		}
+		return w.AddFloatVectorToPayload(val, dim)
+	case schemapb.DataType_Float16Vector:
+		val, ok := data.([]byte)
+		if !ok {
+			return errors.New("incorrect data type")
+		}
+		return w.AddFloat16VectorToPayload(val, dim)
+	case schemapb.DataType_BFloat16Vector:
+		val, ok := data.([]byte)
+		if !ok {
+			return errors.New("incorrect data type")
+		}
+		return w.AddBFloat16VectorToPayload(val, dim)
+	case schemapb.DataType_SparseFloatVector:
+		val, ok := data.(*SparseFloatVectorFieldData)
+		if !ok {
+			return errors.New("incorrect data type")
+		}
+		return w.AddSparseFloatVectorToPayload(val)
+	default:
+		return errors.New("incorrect datatype")
 	}
 }
 
