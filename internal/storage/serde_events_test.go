@@ -20,12 +20,15 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"math/rand"
 	"strconv"
 	"testing"
 
 	"github.com/apache/arrow/go/v12/arrow"
 	"github.com/apache/arrow/go/v12/arrow/array"
 	"github.com/apache/arrow/go/v12/arrow/memory"
+	"github.com/apache/arrow/go/v12/parquet"
+	"github.com/apache/arrow/go/v12/parquet/compress"
 	"github.com/apache/arrow/go/v12/parquet/file"
 	"github.com/apache/arrow/go/v12/parquet/pqarrow"
 	"github.com/stretchr/testify/assert"
@@ -139,6 +142,11 @@ func TestBinlogSerializeWriter(t *testing.T) {
 			assertTestData(t, i, value)
 			err := writer.Write(value)
 			assert.NoError(t, err)
+		}
+
+		for _, f := range schema.Fields {
+			expected := serdeMap[f.DataType].fallbackEncoding()
+			assert.Equal(t, expected, writers[f.FieldID].rw.writerProps.Encoding())
 		}
 
 		err = reader.Next()
@@ -386,6 +394,44 @@ func TestDeltalogPkTsSeparateFormat(t *testing.T) {
 	}
 }
 
+func BenchmarkEncodingCompression(b *testing.B) {
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "int32", Type: arrow.PrimitiveTypes.Int32},
+		{Name: "int64", Type: arrow.PrimitiveTypes.Int64},
+		{Name: "string", Type: arrow.BinaryTypes.String},
+	}, nil)
+
+	record := createRecordBatch(schema, 1000000)
+
+	encodings := []parquet.Encoding{
+		parquet.Encodings.Plain,
+		parquet.Encodings.RLE,
+		parquet.Encodings.DeltaBinaryPacked,
+	}
+
+	for _, encoding := range encodings {
+		name := encoding.String()
+		props := NewWriterProperties(encoding, compress.Codecs.Zstd)
+		b.Run(name, func(b *testing.B) {
+			benchmarkWrite(b, props, schema, record)
+		})
+	}
+}
+
+func NewWriterProperties(encoding parquet.Encoding, codec compress.Compression) *parquet.WriterProperties {
+	if encoding == parquet.Encodings.Plain {
+		return parquet.NewWriterProperties(
+			parquet.WithEncoding(encoding),
+			parquet.WithCompression(codec),
+			parquet.WithDictionaryDefault(true),
+		)
+	}
+	return parquet.NewWriterProperties(
+		parquet.WithEncoding(encoding),
+		parquet.WithCompression(codec),
+	)
+}
+
 func BenchmarkDeltalogReader(b *testing.B) {
 	size := 1000000
 	blob, err := generateTestDeltalogData(size)
@@ -482,4 +528,41 @@ func readDeltaLog(size int, blob *Blob) error {
 		}
 	}
 	return nil
+}
+
+func benchmarkWrite(b *testing.B, writerProps *parquet.WriterProperties, schema *arrow.Schema, record arrow.Record) {
+	fw, err := pqarrow.NewFileWriter(schema, &bytes.Buffer{}, writerProps, pqarrow.
+		DefaultWriterProps())
+	assert.Nil(b, err)
+	defer fw.Close()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := fw.WriteBuffered(record); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+}
+
+func createRecordBatch(schema *arrow.Schema, num int) arrow.Record {
+	pool := memory.NewGoAllocator()
+	b := array.NewRecordBuilder(pool, schema)
+	defer b.Release()
+
+	for i := 0; i < num; i++ {
+		b.Field(0).(*array.Int32Builder).Append(rand.Int31())
+		b.Field(1).(*array.Int64Builder).Append(rand.Int63())
+		b.Field(2).(*array.StringBuilder).Append(randString(10))
+	}
+
+	return b.NewRecord()
+}
+
+func randString(n int) string {
+	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	bytes := make([]byte, n)
+	for i := range bytes {
+		bytes[i] = letters[rand.Intn(len(letters))]
+	}
+	return string(bytes)
 }

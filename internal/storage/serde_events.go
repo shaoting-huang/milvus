@@ -278,7 +278,8 @@ func (bsw *BinlogStreamWriter) GetRecordWriter() (RecordWriter, error) {
 		Name:     strconv.Itoa(int(fid)),
 		Type:     serdeMap[bsw.fieldSchema.DataType].arrowType(int(dim)),
 		Nullable: true, // No nullable check here.
-	}, &bsw.buf)
+	}, &bsw.buf,
+		WithRecordWriterProps(GetWriterPropsByDataType(bsw.fieldSchema.DataType)))
 	if err != nil {
 		return nil, err
 	}
@@ -430,7 +431,8 @@ func (dsw *DeltalogStreamWriter) GetRecordWriter() (RecordWriter, error) {
 		Name:     dsw.fieldSchema.Name,
 		Type:     serdeMap[dsw.fieldSchema.DataType].arrowType(int(dim)),
 		Nullable: false,
-	}, &dsw.buf)
+	}, &dsw.buf,
+		WithRecordWriterProps(GetWriterPropsByDataType(schemapb.DataType_String)))
 	if err != nil {
 		return nil, err
 	}
