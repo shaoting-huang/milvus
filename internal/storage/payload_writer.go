@@ -82,6 +82,7 @@ func NewPayloadWriter(colType schemapb.DataType, options ...PayloadWriterOptions
 		writerProps: parquet.NewWriterProperties(
 			parquet.WithCompression(compress.Codecs.Zstd),
 			parquet.WithCompressionLevel(3),
+			parquet.WithDictionaryDefault(false),
 		),
 		dim: &NullableInt{},
 	}

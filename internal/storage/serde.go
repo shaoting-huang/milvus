@@ -571,7 +571,8 @@ func GetWriterPropsByDataType(dt schemapb.DataType) *parquet.WriterProperties {
 	return parquet.NewWriterProperties(
 		parquet.WithCompression(compress.Codecs.Zstd),
 		parquet.WithCompressionLevel(3),
-		parquet.WithEncoding(serdeMap[dt].fallbackEncoding()),
+		parquet.WithDictionaryDefault(false),
+		// parquet.WithEncoding(serdeMap[dt].fallbackEncoding()),
 	)
 }
 
@@ -744,7 +745,8 @@ func newSingleFieldRecordWriter(fieldId FieldID, field arrow.Field, writer io.Wr
 		writerProps: parquet.NewWriterProperties(
 			parquet.WithMaxRowGroupLength(math.MaxInt64), // No additional grouping for now.
 			parquet.WithCompression(compress.Codecs.Zstd),
-			parquet.WithCompressionLevel(3)),
+			parquet.WithCompressionLevel(3),
+			parquet.WithDictionaryDefault(false)),
 	}
 	for _, o := range options {
 		o(w)
