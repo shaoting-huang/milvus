@@ -19,6 +19,7 @@ package storage
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"math/rand"
 	"strconv"
@@ -394,44 +395,6 @@ func TestDeltalogPkTsSeparateFormat(t *testing.T) {
 	}
 }
 
-func BenchmarkEncodingCompression(b *testing.B) {
-	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "int32", Type: arrow.PrimitiveTypes.Int32},
-		{Name: "int64", Type: arrow.PrimitiveTypes.Int64},
-		{Name: "string", Type: arrow.BinaryTypes.String},
-	}, nil)
-
-	record := createRecordBatch(schema, 1000000)
-
-	encodings := []parquet.Encoding{
-		parquet.Encodings.Plain,
-		parquet.Encodings.RLE,
-		parquet.Encodings.DeltaBinaryPacked,
-	}
-
-	for _, encoding := range encodings {
-		name := encoding.String()
-		props := NewWriterProperties(encoding, compress.Codecs.Zstd)
-		b.Run(name, func(b *testing.B) {
-			benchmarkWrite(b, props, schema, record)
-		})
-	}
-}
-
-func NewWriterProperties(encoding parquet.Encoding, codec compress.Compression) *parquet.WriterProperties {
-	if encoding == parquet.Encodings.Plain {
-		return parquet.NewWriterProperties(
-			parquet.WithEncoding(encoding),
-			parquet.WithCompression(codec),
-			parquet.WithDictionaryDefault(true),
-		)
-	}
-	return parquet.NewWriterProperties(
-		parquet.WithEncoding(encoding),
-		parquet.WithCompression(codec),
-	)
-}
-
 func BenchmarkDeltalogReader(b *testing.B) {
 	size := 1000000
 	blob, err := generateTestDeltalogData(size)
@@ -530,32 +493,69 @@ func readDeltaLog(size int, blob *Blob) error {
 	return nil
 }
 
-func benchmarkWrite(b *testing.B, writerProps *parquet.WriterProperties, schema *arrow.Schema, record arrow.Record) {
-	fw, err := pqarrow.NewFileWriter(schema, &bytes.Buffer{}, writerProps, pqarrow.
-		DefaultWriterProps())
-	assert.Nil(b, err)
-	defer fw.Close()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		if err := fw.WriteBuffered(record); err != nil {
-			b.Fatal(err)
-		}
-	}
-	b.StopTimer()
-}
+func TestEncodingCompression(t *testing.T) {
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "int32", Type: arrow.PrimitiveTypes.Int32},
+		{Name: "int64", Type: arrow.PrimitiveTypes.Int64},
+		{Name: "float", Type: arrow.PrimitiveTypes.Float32},
+		// {Name: "string", Type: arrow.BinaryTypes.String},
+	}, nil)
+	size := 100
 
-func createRecordBatch(schema *arrow.Schema, num int) arrow.Record {
 	pool := memory.NewGoAllocator()
 	b := array.NewRecordBuilder(pool, schema)
 	defer b.Release()
 
-	for i := 0; i < num; i++ {
-		b.Field(0).(*array.Int32Builder).Append(rand.Int31())
+	for i := 0; i < size; i++ {
+		b.Field(0).(*array.Int32Builder).Append(int32(i))
 		b.Field(1).(*array.Int64Builder).Append(rand.Int63())
-		b.Field(2).(*array.StringBuilder).Append(randString(10))
+		b.Field(2).(*array.Float32Builder).Append(rand.Float32() * float32(i))
+		// b.Field(2).(*array.StringBuilder).Append(randString(10))
+	}
+	record := b.NewRecord()
+
+	encodings := []parquet.Encoding{
+		parquet.Encodings.Plain,
+		parquet.Encodings.DeltaBinaryPacked,
+		parquet.Encodings.BitPacked,
 	}
 
-	return b.NewRecord()
+	for _, encoding := range encodings {
+		props := parquet.NewWriterProperties(
+			parquet.WithEncoding(encoding),
+			parquet.WithCompression(compress.Codecs.Zstd),
+			parquet.WithDictionaryDefault(true),
+			parquet.WithDictionaryPageSizeLimit(0),
+		)
+		t.Run(encoding.String(), func(t *testing.T) {
+			buf := &bytes.Buffer{}
+			fw, err := pqarrow.NewFileWriter(schema, buf, props, pqarrow.DefaultWriterProps())
+			assert.NoError(t, err)
+			err = fw.WriteBuffered(record)
+			assert.NoError(t, err)
+			fw.Close()
+
+			fmt.Println(len(buf.Bytes()))
+
+			rdr, err := file.NewParquetReader(bytes.NewReader(buf.Bytes()))
+			assert.NoError(t, err)
+			defer rdr.Close()
+
+			for i := 0; i < rdr.NumRowGroups(); i++ {
+				rg := rdr.RowGroup(i)
+				for j := 0; j < rg.NumColumns(); j++ {
+					pr, err := rg.GetColumnPageReader(j)
+					assert.NoError(t, err)
+					k := 0
+					for pr.Next() {
+						// page := pr.Page()
+						// log.Printf("raw group %d column %d page %d encodings: %v", i, j, k, page.Encoding().String())
+						k++
+					}
+				}
+			}
+		})
+	}
 }
 
 func randString(n int) string {
