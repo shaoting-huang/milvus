@@ -94,6 +94,8 @@ message SubSearchRequest {
   int64  topk = 7;
   int64 offset = 8;
   string metricType = 9;
+  int64 group_by_field_id = 10;
+  int64 group_size = 11;
 }
 
 message SearchRequest {
@@ -120,6 +122,8 @@ message SearchRequest {
   bool   is_advanced = 20;
   int64 offset = 21;
   common.ConsistencyLevel consistency_level = 22;
+  int64 group_by_field_id = 23;
+  int64 group_size = 24;
 }
 
 message SubSearchResults {

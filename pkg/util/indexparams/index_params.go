@@ -54,6 +54,7 @@ var configableIndexParams = typeutil.NewSet[string]()
 
 func init() {
 	configableIndexParams.Insert(common.MmapEnabledKey)
+	configableIndexParams.Insert(common.IndexOffsetCacheEnabledKey)
 }
 
 func IsConfigableIndexParam(key string) bool {
@@ -296,6 +297,14 @@ func SetDiskIndexBuildParams(indexParams map[string]string, fieldDataSize int64)
 	indexParams[NumBuildThreadKey] = strconv.Itoa(int(float32(hardware.GetCPUNum()) * float32(buildNumThreadsRatio)))
 	indexParams[BuildDramBudgetKey] = fmt.Sprintf("%f", float32(hardware.GetFreeMemoryCount())/(1<<30))
 	return nil
+}
+
+func SetBitmapIndexLoadParams(params *paramtable.ComponentParam, indexParams map[string]string) {
+	_, exist := indexParams[common.IndexOffsetCacheEnabledKey]
+	if exist {
+		return
+	}
+	indexParams[common.IndexOffsetCacheEnabledKey] = params.QueryNodeCfg.IndexOffsetCacheEnabled.GetValue()
 }
 
 // SetDiskIndexLoadParams set disk index load params with ratio params on queryNode

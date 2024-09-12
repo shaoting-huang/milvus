@@ -17,7 +17,7 @@
 package segments
 
 /*
-#cgo pkg-config: milvus_segcore milvus_futures
+#cgo pkg-config: milvus_core
 
 #include "futures/future_c.h"
 #include "segcore/collection_c.h"
@@ -29,25 +29,22 @@ import "C"
 import (
 	"context"
 	"fmt"
-	"io"
 	"runtime"
 	"strings"
 	"unsafe"
 
-	"github.com/apache/arrow/go/v12/arrow/array"
 	"github.com/cockroachdb/errors"
-	"github.com/golang/protobuf/proto"
 	"go.opentelemetry.io/otel"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
-	milvus_storage "github.com/milvus-io/milvus-storage/go/storage"
-	"github.com/milvus-io/milvus-storage/go/storage/options"
 	"github.com/milvus-io/milvus/internal/proto/cgopb"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
+	"github.com/milvus-io/milvus/internal/proto/indexcgopb"
 	"github.com/milvus-io/milvus/internal/proto/querypb"
 	"github.com/milvus-io/milvus/internal/proto/segcorepb"
 	"github.com/milvus-io/milvus/internal/querycoordv2/params"
@@ -55,7 +52,6 @@ import (
 	"github.com/milvus-io/milvus/internal/querynodev2/segments/state"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/util/cgo"
-	typeutil_internal "github.com/milvus-io/milvus/internal/util/typeutil"
 	"github.com/milvus-io/milvus/pkg/common"
 	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/metrics"
@@ -239,7 +235,7 @@ func (s *baseSegment) SetNeedUpdatedVersion(version int64) {
 }
 
 type FieldInfo struct {
-	datapb.FieldBinlog
+	*datapb.FieldBinlog
 	RowCount int64
 }
 
@@ -259,7 +255,6 @@ type LocalSegment struct {
 	lastDeltaTimestamp *atomic.Uint64
 	fields             *typeutil.ConcurrentMap[int64, *FieldInfo]
 	fieldIndexes       *typeutil.ConcurrentMap[int64, *IndexedFieldInfo]
-	space              *milvus_storage.Space
 }
 
 func NewSegment(ctx context.Context,
@@ -297,7 +292,7 @@ func NewSegment(ctx context.Context,
 
 	var newPtr C.CSegmentInterface
 	_, err = GetDynamicPool().Submit(func() (any, error) {
-		status := C.NewSegment(collection.collectionPtr, cSegType, C.int64_t(loadInfo.GetSegmentID()), &newPtr)
+		status := C.NewSegment(collection.collectionPtr, cSegType, C.int64_t(loadInfo.GetSegmentID()), &newPtr, C.bool(loadInfo.GetIsSorted()))
 		err := HandleCStatus(ctx, &status, "NewSegmentFailed",
 			zap.Int64("collectionID", loadInfo.GetCollectionID()),
 			zap.Int64("partitionID", loadInfo.GetPartitionID()),
@@ -336,76 +331,6 @@ func NewSegment(ctx context.Context,
 	return segment, nil
 }
 
-func NewSegmentV2(
-	ctx context.Context,
-	collection *Collection,
-	segmentType SegmentType,
-	version int64,
-	loadInfo *querypb.SegmentLoadInfo,
-) (Segment, error) {
-	/*
-		CSegmentInterface
-		NewSegment(CCollection collection, uint64_t segment_id, SegmentType seg_type);
-	*/
-	if loadInfo.GetLevel() == datapb.SegmentLevel_L0 {
-		return NewL0Segment(collection, segmentType, version, loadInfo)
-	}
-	base, err := newBaseSegment(collection, segmentType, version, loadInfo)
-	if err != nil {
-		return nil, err
-	}
-	var segmentPtr C.CSegmentInterface
-	var status C.CStatus
-	var locker *state.LoadStateLock
-	switch segmentType {
-	case SegmentTypeSealed:
-		status = C.NewSegment(collection.collectionPtr, C.Sealed, C.int64_t(loadInfo.GetSegmentID()), &segmentPtr)
-		locker = state.NewLoadStateLock(state.LoadStateOnlyMeta)
-	case SegmentTypeGrowing:
-		status = C.NewSegment(collection.collectionPtr, C.Growing, C.int64_t(loadInfo.GetSegmentID()), &segmentPtr)
-		locker = state.NewLoadStateLock(state.LoadStateDataLoaded)
-	default:
-		return nil, fmt.Errorf("illegal segment type %d when create segment %d", segmentType, loadInfo.GetSegmentID())
-	}
-
-	if err := HandleCStatus(ctx, &status, "NewSegmentFailed"); err != nil {
-		return nil, err
-	}
-
-	log.Info("create segment",
-		zap.Int64("collectionID", loadInfo.GetCollectionID()),
-		zap.Int64("partitionID", loadInfo.GetPartitionID()),
-		zap.Int64("segmentID", loadInfo.GetSegmentID()),
-		zap.String("segmentType", segmentType.String()))
-
-	url, err := typeutil_internal.GetStorageURI(paramtable.Get().CommonCfg.StorageScheme.GetValue(), paramtable.Get().CommonCfg.StoragePathPrefix.GetValue(), loadInfo.GetSegmentID())
-	if err != nil {
-		return nil, err
-	}
-	space, err := milvus_storage.Open(url, options.NewSpaceOptionBuilder().SetVersion(loadInfo.GetStorageVersion()).Build())
-	if err != nil {
-		return nil, err
-	}
-
-	segment := &LocalSegment{
-		baseSegment:        base,
-		ptrLock:            locker,
-		ptr:                segmentPtr,
-		lastDeltaTimestamp: atomic.NewUint64(0),
-		fields:             typeutil.NewConcurrentMap[int64, *FieldInfo](),
-		fieldIndexes:       typeutil.NewConcurrentMap[int64, *IndexedFieldInfo](),
-		space:              space,
-		memSize:            atomic.NewInt64(-1),
-		rowNum:             atomic.NewInt64(-1),
-		insertCount:        atomic.NewInt64(0),
-	}
-
-	if err := segment.initializeSegment(); err != nil {
-		return nil, err
-	}
-	return segment, nil
-}
-
 func (s *LocalSegment) initializeSegment() error {
 	loadInfo := s.loadInfo.Load()
 	indexedFieldInfos, fieldBinlogs := separateIndexAndBinlog(loadInfo)
@@ -426,7 +351,7 @@ func (s *LocalSegment) initializeSegment() error {
 		})
 		if !typeutil.IsVectorType(field.GetDataType()) && !s.HasRawData(fieldID) {
 			s.fields.Insert(fieldID, &FieldInfo{
-				FieldBinlog: *info.FieldBinlog,
+				FieldBinlog: info.FieldBinlog,
 				RowCount:    loadInfo.GetNumOfRows(),
 			})
 		}
@@ -434,7 +359,7 @@ func (s *LocalSegment) initializeSegment() error {
 
 	for _, binlogs := range fieldBinlogs {
 		s.fields.Insert(binlogs.FieldID, &FieldInfo{
-			FieldBinlog: *binlogs,
+			FieldBinlog: binlogs,
 			RowCount:    loadInfo.GetNumOfRows(),
 		})
 	}
@@ -932,36 +857,13 @@ func (s *LocalSegment) LoadMultiFieldData(ctx context.Context) error {
 
 	var status C.CStatus
 	GetLoadPool().Submit(func() (any, error) {
-		if paramtable.Get().CommonCfg.EnableStorageV2.GetAsBool() {
-			uri, err := typeutil_internal.GetStorageURI(paramtable.Get().CommonCfg.StorageScheme.GetValue(), paramtable.Get().CommonCfg.StoragePathPrefix.GetValue(), s.ID())
-			if err != nil {
-				return nil, err
-			}
-
-			loadFieldDataInfo.appendURI(uri)
-			loadFieldDataInfo.appendStorageVersion(s.space.GetCurrentVersion())
-			status = C.LoadFieldDataV2(s.ptr, loadFieldDataInfo.cLoadFieldDataInfo)
-		} else {
-			status = C.LoadFieldData(s.ptr, loadFieldDataInfo.cLoadFieldDataInfo)
-		}
+		status = C.LoadFieldData(s.ptr, loadFieldDataInfo.cLoadFieldDataInfo)
 		return nil, nil
 	}).Await()
 	if err := HandleCStatus(ctx, &status, "LoadMultiFieldData failed",
 		zap.Int64("collectionID", s.Collection()),
 		zap.Int64("partitionID", s.Partition()),
 		zap.Int64("segmentID", s.ID())); err != nil {
-		return err
-	}
-
-	GetDynamicPool().Submit(func() (any, error) {
-		status = C.RemoveDuplicatePkRecords(s.ptr)
-		return nil, nil
-	}).Await()
-
-	if err := HandleCStatus(ctx, &status, "RemoveDuplicatePkRecords failed",
-		zap.Int64("collectionID", s.Collection()),
-		zap.Int64("segmentID", s.ID()),
-		zap.String("segmentType", s.Type().String())); err != nil {
 		return err
 	}
 
@@ -972,7 +874,7 @@ func (s *LocalSegment) LoadMultiFieldData(ctx context.Context) error {
 	return nil
 }
 
-func (s *LocalSegment) LoadFieldData(ctx context.Context, fieldID int64, rowCount int64, field *datapb.FieldBinlog, useMmap bool) error {
+func (s *LocalSegment) LoadFieldData(ctx context.Context, fieldID int64, rowCount int64, field *datapb.FieldBinlog) error {
 	if !s.ptrLock.RLockIf(state.IsNotReleased) {
 		return merr.WrapErrSegmentNotLoaded(s.ID(), "segment released")
 	}
@@ -1010,27 +912,20 @@ func (s *LocalSegment) LoadFieldData(ctx context.Context, fieldID int64, rowCoun
 		}
 	}
 
+	// TODO retrieve_enable should be considered
 	collection := s.collection
-	mmapEnabled := useMmap || common.IsFieldMmapEnabled(collection.Schema(), fieldID) ||
-		(!common.FieldHasMmapKey(collection.Schema(), fieldID) && params.Params.QueryNodeCfg.MmapEnabled.GetAsBool())
+	fieldSchema, err := getFieldSchema(collection.Schema(), fieldID)
+	if err != nil {
+		return err
+	}
+	mmapEnabled := isDataMmapEnable(fieldSchema)
 	loadFieldDataInfo.appendMMapDirPath(paramtable.Get().QueryNodeCfg.MmapDirPath.GetValue())
 	loadFieldDataInfo.enableMmap(fieldID, mmapEnabled)
 
 	var status C.CStatus
 	GetLoadPool().Submit(func() (any, error) {
 		log.Info("submitted loadFieldData task to load pool")
-		if paramtable.Get().CommonCfg.EnableStorageV2.GetAsBool() {
-			uri, err := typeutil_internal.GetStorageURI(paramtable.Get().CommonCfg.StorageScheme.GetValue(), paramtable.Get().CommonCfg.StoragePathPrefix.GetValue(), s.ID())
-			if err != nil {
-				return nil, err
-			}
-
-			loadFieldDataInfo.appendURI(uri)
-			loadFieldDataInfo.appendStorageVersion(s.space.GetCurrentVersion())
-			status = C.LoadFieldDataV2(s.ptr, loadFieldDataInfo.cLoadFieldDataInfo)
-		} else {
-			status = C.LoadFieldData(s.ptr, loadFieldDataInfo.cLoadFieldDataInfo)
-		}
+		status = C.LoadFieldData(s.ptr, loadFieldDataInfo.cLoadFieldDataInfo)
 		return nil, nil
 	}).Await()
 	if err := HandleCStatus(ctx, &status, "LoadFieldData failed",
@@ -1043,95 +938,6 @@ func (s *LocalSegment) LoadFieldData(ctx context.Context, fieldID int64, rowCoun
 
 	log.Info("load field done")
 
-	return nil
-}
-
-func (s *LocalSegment) LoadDeltaData2(ctx context.Context, schema *schemapb.CollectionSchema) error {
-	deleteReader, err := s.space.ScanDelete()
-	if err != nil {
-		return err
-	}
-	if !deleteReader.Schema().HasField(common.TimeStampFieldName) {
-		return fmt.Errorf("can not read timestamp field in space")
-	}
-	pkFieldSchema, err := typeutil.GetPrimaryFieldSchema(schema)
-	if err != nil {
-		return err
-	}
-	ids := &schemapb.IDs{}
-	var pkint64s []int64
-	var pkstrings []string
-	var tss []int64
-	for deleteReader.Next() {
-		rec := deleteReader.Record()
-		indices := rec.Schema().FieldIndices(common.TimeStampFieldName)
-		tss = append(tss, rec.Column(indices[0]).(*array.Int64).Int64Values()...)
-		indices = rec.Schema().FieldIndices(pkFieldSchema.Name)
-		switch pkFieldSchema.DataType {
-		case schemapb.DataType_Int64:
-			pkint64s = append(pkint64s, rec.Column(indices[0]).(*array.Int64).Int64Values()...)
-		case schemapb.DataType_VarChar:
-			columnData := rec.Column(indices[0]).(*array.String)
-			for i := 0; i < columnData.Len(); i++ {
-				pkstrings = append(pkstrings, columnData.Value(i))
-			}
-		default:
-			return fmt.Errorf("unknown data type %v", pkFieldSchema.DataType)
-		}
-	}
-	if err := deleteReader.Err(); err != nil && err != io.EOF {
-		return err
-	}
-
-	switch pkFieldSchema.DataType {
-	case schemapb.DataType_Int64:
-		ids.IdField = &schemapb.IDs_IntId{
-			IntId: &schemapb.LongArray{
-				Data: pkint64s,
-			},
-		}
-	case schemapb.DataType_VarChar:
-		ids.IdField = &schemapb.IDs_StrId{
-			StrId: &schemapb.StringArray{
-				Data: pkstrings,
-			},
-		}
-	default:
-		return fmt.Errorf("unknown data type %v", pkFieldSchema.DataType)
-	}
-
-	idsBlob, err := proto.Marshal(ids)
-	if err != nil {
-		return err
-	}
-
-	if len(tss) == 0 {
-		return nil
-	}
-
-	loadInfo := C.CLoadDeletedRecordInfo{
-		timestamps:        unsafe.Pointer(&tss[0]),
-		primary_keys:      (*C.uint8_t)(unsafe.Pointer(&idsBlob[0])),
-		primary_keys_size: C.uint64_t(len(idsBlob)),
-		row_count:         C.int64_t(len(tss)),
-	}
-	/*
-		CStatus
-		LoadDeletedRecord(CSegmentInterface c_segment, CLoadDeletedRecordInfo deleted_record_info)
-	*/
-	var status C.CStatus
-	GetDynamicPool().Submit(func() (any, error) {
-		status = C.LoadDeletedRecord(s.ptr, loadInfo)
-		return nil, nil
-	}).Await()
-
-	if err := HandleCStatus(ctx, &status, "LoadDeletedRecord failed"); err != nil {
-		return err
-	}
-
-	log.Info("load deleted record done",
-		zap.Int("rowNum", len(tss)),
-		zap.String("segmentType", s.Type().String()))
 	return nil
 }
 
@@ -1311,16 +1117,23 @@ func (s *LocalSegment) LoadIndex(ctx context.Context, indexInfo *querypb.FieldIn
 		}
 	}
 
+	// set whether enable offset cache for bitmap index
+	if indexParams["index_type"] == indexparamcheck.IndexBitmap {
+		indexparams.SetBitmapIndexLoadParams(paramtable.Get(), indexParams)
+	}
+
 	if err := indexparams.AppendPrepareLoadParams(paramtable.Get(), indexParams); err != nil {
 		return err
 	}
+
+	enableMmap := isIndexMmapEnable(fieldSchema, indexInfo)
 
 	indexInfoProto := &cgopb.LoadIndexInfo{
 		CollectionID:       s.Collection(),
 		PartitionID:        s.Partition(),
 		SegmentID:          s.ID(),
 		Field:              fieldSchema,
-		EnableMmap:         isIndexMmapEnable(indexInfo),
+		EnableMmap:         enableMmap,
 		MmapDirPath:        paramtable.Get().QueryNodeCfg.MmapDirPath.GetValue(),
 		IndexID:            indexInfo.GetIndexID(),
 		IndexBuildID:       indexInfo.GetBuildID(),
@@ -1331,13 +1144,6 @@ func (s *LocalSegment) LoadIndex(ctx context.Context, indexInfo *querypb.FieldIn
 		IndexStoreVersion:  indexInfo.GetIndexStoreVersion(),
 	}
 
-	if paramtable.Get().CommonCfg.EnableStorageV2.GetAsBool() {
-		uri, err := typeutil_internal.GetStorageURI(paramtable.Get().CommonCfg.StorageScheme.GetValue(), paramtable.Get().CommonCfg.StoragePathPrefix.GetValue(), s.ID())
-		if err != nil {
-			return err
-		}
-		indexInfoProto.Uri = uri
-	}
 	newLoadIndexInfoSpan := tr.RecordSpan()
 
 	// 2.
@@ -1366,7 +1172,7 @@ func (s *LocalSegment) LoadIndex(ctx context.Context, indexInfo *querypb.FieldIn
 	}
 
 	// 4.
-	s.WarmupChunkCache(ctx, indexInfo.GetFieldID())
+	s.WarmupChunkCache(ctx, indexInfo.GetFieldID(), isDataMmapEnable(fieldSchema))
 	warmupChunkCacheSpan := tr.RecordSpan()
 	log.Info("Finish loading index",
 		zap.Duration("newLoadIndexInfoSpan", newLoadIndexInfoSpan),
@@ -1375,6 +1181,38 @@ func (s *LocalSegment) LoadIndex(ctx context.Context, indexInfo *querypb.FieldIn
 		zap.Duration("warmupChunkCacheSpan", warmupChunkCacheSpan),
 	)
 	return nil
+}
+
+func (s *LocalSegment) LoadTextIndex(ctx context.Context, textLogs *datapb.TextIndexStats, schemaHelper *typeutil.SchemaHelper) error {
+	log.Ctx(ctx).Info("load text index", zap.Int64("field id", textLogs.GetFieldID()), zap.Any("text logs", textLogs))
+
+	f, err := schemaHelper.GetFieldFromID(textLogs.GetFieldID())
+	if err != nil {
+		return err
+	}
+
+	cgoProto := &indexcgopb.LoadTextIndexInfo{
+		FieldID:      textLogs.GetFieldID(),
+		Version:      textLogs.GetVersion(),
+		BuildID:      textLogs.GetBuildID(),
+		Files:        textLogs.GetFiles(),
+		Schema:       f,
+		CollectionID: s.Collection(),
+		PartitionID:  s.Partition(),
+	}
+
+	marshaled, err := proto.Marshal(cgoProto)
+	if err != nil {
+		return err
+	}
+
+	var status C.CStatus
+	_, _ = GetLoadPool().Submit(func() (any, error) {
+		status = C.LoadTextIndex(s.ptr, (*C.uint8_t)(unsafe.Pointer(&marshaled[0])), (C.uint64_t)(len(marshaled)))
+		return nil, nil
+	}).Await()
+
+	return HandleCStatus(ctx, &status, "LoadTextIndex failed")
 }
 
 func (s *LocalSegment) UpdateIndexInfo(ctx context.Context, indexInfo *querypb.FieldIndexInfo, info *LoadIndexInfo) error {
@@ -1414,12 +1252,13 @@ func (s *LocalSegment) UpdateIndexInfo(ctx context.Context, indexInfo *querypb.F
 	return nil
 }
 
-func (s *LocalSegment) WarmupChunkCache(ctx context.Context, fieldID int64) {
+func (s *LocalSegment) WarmupChunkCache(ctx context.Context, fieldID int64, mmapEnabled bool) {
 	log := log.Ctx(ctx).With(
 		zap.Int64("collectionID", s.Collection()),
 		zap.Int64("partitionID", s.Partition()),
 		zap.Int64("segmentID", s.ID()),
 		zap.Int64("fieldID", fieldID),
+		zap.Bool("mmapEnabled", mmapEnabled),
 	)
 	if !s.ptrLock.RLockIf(state.IsNotReleased) {
 		return
@@ -1433,7 +1272,8 @@ func (s *LocalSegment) WarmupChunkCache(ctx context.Context, fieldID int64) {
 	case "sync":
 		GetWarmupPool().Submit(func() (any, error) {
 			cFieldID := C.int64_t(fieldID)
-			status = C.WarmupChunkCache(s.ptr, cFieldID)
+			cMmapEnabled := C.bool(mmapEnabled)
+			status = C.WarmupChunkCache(s.ptr, cFieldID, cMmapEnabled)
 			if err := HandleCStatus(ctx, &status, "warming up chunk cache failed"); err != nil {
 				log.Warn("warming up chunk cache synchronously failed", zap.Error(err))
 				return nil, err
@@ -1453,7 +1293,8 @@ func (s *LocalSegment) WarmupChunkCache(ctx context.Context, fieldID int64) {
 			defer s.ptrLock.RUnlock()
 
 			cFieldID := C.int64_t(fieldID)
-			status = C.WarmupChunkCache(s.ptr, cFieldID)
+			cMmapEnabled := C.bool(mmapEnabled)
+			status = C.WarmupChunkCache(s.ptr, cFieldID, cMmapEnabled)
 			if err := HandleCStatus(ctx, &status, ""); err != nil {
 				log.Warn("warming up chunk cache asynchronously failed", zap.Error(err))
 				return nil, err
@@ -1483,6 +1324,24 @@ func (s *LocalSegment) UpdateFieldRawDataSize(ctx context.Context, numRows int64
 	}
 
 	log.Ctx(ctx).Info("updateFieldRawDataSize done", zap.Int64("segmentID", s.ID()))
+
+	return nil
+}
+
+func (s *LocalSegment) CreateTextIndex(ctx context.Context, fieldID int64) error {
+	var status C.CStatus
+	log.Ctx(ctx).Info("create text index for segment", zap.Int64("segmentID", s.ID()), zap.Int64("fieldID", fieldID))
+
+	GetDynamicPool().Submit(func() (any, error) {
+		status = C.CreateTextIndex(s.ptr, C.int64_t(fieldID))
+		return nil, nil
+	}).Await()
+
+	if err := HandleCStatus(ctx, &status, "CreateTextIndex failed"); err != nil {
+		return err
+	}
+
+	log.Ctx(ctx).Info("create text index for segment done", zap.Int64("segmentID", s.ID()), zap.Int64("fieldID", fieldID))
 
 	return nil
 }

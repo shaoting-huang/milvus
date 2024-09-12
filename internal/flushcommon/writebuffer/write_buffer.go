@@ -14,10 +14,11 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/flushcommon/metacache"
+	"github.com/milvus-io/milvus/internal/flushcommon/metacache/pkoracle"
 	"github.com/milvus-io/milvus/internal/flushcommon/syncmgr"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
-	"github.com/milvus-io/milvus/internal/querycoordv2/params"
 	"github.com/milvus-io/milvus/internal/storage"
+	"github.com/milvus-io/milvus/internal/util/streamingutil"
 	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/metrics"
 	"github.com/milvus-io/milvus/pkg/mq/msgstream"
@@ -100,7 +101,7 @@ func (c *checkpointCandidates) GetEarliestWithDefault(def *checkpointCandidate) 
 	return result
 }
 
-func NewWriteBuffer(channel string, metacache metacache.MetaCache, storageV2Cache *metacache.StorageV2Cache, syncMgr syncmgr.SyncManager, opts ...WriteBufferOption) (WriteBuffer, error) {
+func NewWriteBuffer(channel string, metacache metacache.MetaCache, syncMgr syncmgr.SyncManager, opts ...WriteBufferOption) (WriteBuffer, error) {
 	option := defaultWBOption(metacache)
 	for _, opt := range opts {
 		opt(option)
@@ -108,9 +109,9 @@ func NewWriteBuffer(channel string, metacache metacache.MetaCache, storageV2Cach
 
 	switch option.deletePolicy {
 	case DeletePolicyBFPkOracle:
-		return NewBFWriteBuffer(channel, metacache, storageV2Cache, syncMgr, option)
+		return NewBFWriteBuffer(channel, metacache, syncMgr, option)
 	case DeletePolicyL0Delta:
-		return NewL0WriteBuffer(channel, metacache, storageV2Cache, syncMgr, option)
+		return NewL0WriteBuffer(channel, metacache, syncMgr, option)
 	default:
 		return nil, merr.WrapErrParameterInvalid("valid delete policy config", option.deletePolicy)
 	}
@@ -140,34 +141,23 @@ type writeBufferBase struct {
 	checkpoint     *msgpb.MsgPosition
 	flushTimestamp *atomic.Uint64
 
-	storagev2Cache *metacache.StorageV2Cache
-
 	// pre build logger
 	logger        *log.MLogger
 	cpRatedLogger *log.MLogger
 }
 
-func newWriteBufferBase(channel string, metacache metacache.MetaCache, storageV2Cache *metacache.StorageV2Cache, syncMgr syncmgr.SyncManager, option *writeBufferOption) (*writeBufferBase, error) {
+func newWriteBufferBase(channel string, metacache metacache.MetaCache, syncMgr syncmgr.SyncManager, option *writeBufferOption) (*writeBufferBase, error) {
 	flushTs := atomic.NewUint64(nonFlushTS)
 	flushTsPolicy := GetFlushTsPolicy(flushTs, metacache)
 	option.syncPolicies = append(option.syncPolicies, flushTsPolicy)
 
 	var serializer syncmgr.Serializer
 	var err error
-	if params.Params.CommonCfg.EnableStorageV2.GetAsBool() {
-		serializer, err = syncmgr.NewStorageV2Serializer(
-			storageV2Cache,
-			option.idAllocator,
-			metacache,
-			option.metaWriter,
-		)
-	} else {
-		serializer, err = syncmgr.NewStorageSerializer(
-			option.idAllocator,
-			metacache,
-			option.metaWriter,
-		)
-	}
+	serializer, err = syncmgr.NewStorageSerializer(
+		option.idAllocator,
+		metacache,
+		option.metaWriter,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +191,6 @@ func newWriteBufferBase(channel string, metacache metacache.MetaCache, storageV2
 		syncCheckpoint:   newCheckpointCandiates(),
 		syncPolicies:     option.syncPolicies,
 		flushTimestamp:   flushTs,
-		storagev2Cache:   storageV2Cache,
 	}
 
 	wb.logger = log.With(zap.Int64("collectionID", wb.collectionID),
@@ -357,6 +346,11 @@ func (wb *writeBufferBase) syncSegments(ctx context.Context, segmentIDs []int64)
 			if syncTask.StartPosition() != nil {
 				wb.syncCheckpoint.Remove(syncTask.SegmentID(), syncTask.StartPosition().GetTimestamp())
 			}
+
+			if streamingutil.IsStreamingServiceEnabled() && syncTask.IsFlush() {
+				wb.metaCache.RemoveSegments(metacache.WithSegmentIDs(syncTask.SegmentID()))
+				log.Info("flushed segment removed", zap.Int64("segmentID", syncTask.SegmentID()), zap.String("channel", syncTask.ChannelName()))
+			}
 			return nil
 		}))
 	}
@@ -504,11 +498,11 @@ func (wb *writeBufferBase) prepareInsert(insertMsgs []*msgstream.InsertMsg) ([]*
 				return nil, merr.WrapErrServiceInternal("timestamp column row num not match")
 			}
 
-			timestamps := tsFieldData.GetRows().([]int64)
+			timestamps := tsFieldData.GetDataRows().([]int64)
 
 			switch wb.pkField.GetDataType() {
 			case schemapb.DataType_Int64:
-				pks := pkFieldData.GetRows().([]int64)
+				pks := pkFieldData.GetDataRows().([]int64)
 				for idx, pk := range pks {
 					ts, ok := inData.intPKTs[pk]
 					if !ok || timestamps[idx] < ts {
@@ -516,7 +510,7 @@ func (wb *writeBufferBase) prepareInsert(insertMsgs []*msgstream.InsertMsg) ([]*
 					}
 				}
 			case schemapb.DataType_VarChar:
-				pks := pkFieldData.GetRows().([]string)
+				pks := pkFieldData.GetDataRows().([]string)
 				for idx, pk := range pks {
 					ts, ok := inData.strPKTs[pk]
 					if !ok || timestamps[idx] < ts {
@@ -548,8 +542,8 @@ func (wb *writeBufferBase) bufferInsert(inData *inData, startPos, endPos *msgpb.
 			InsertChannel: wb.channelName,
 			StartPosition: startPos,
 			State:         commonpb.SegmentState_Growing,
-		}, func(_ *datapb.SegmentInfo) *metacache.BloomFilterSet {
-			return metacache.NewBloomFilterSetWithBatchSize(wb.getEstBatchSize())
+		}, func(_ *datapb.SegmentInfo) pkoracle.PkStat {
+			return pkoracle.NewBloomFilterSetWithBatchSize(wb.getEstBatchSize())
 		}, metacache.SetStartPosRecorded(false))
 		log.Info("add growing segment", zap.Int64("segmentID", inData.segmentID), zap.String("channel", wb.channelName))
 	}
@@ -659,8 +653,6 @@ func (wb *writeBufferBase) Close(ctx context.Context, drop bool) {
 		}
 		switch t := syncTask.(type) {
 		case *syncmgr.SyncTask:
-			t.WithDrop()
-		case *syncmgr.SyncTaskV2:
 			t.WithDrop()
 		}
 

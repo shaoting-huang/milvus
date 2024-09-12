@@ -60,6 +60,9 @@ ToString(ScalarIndexType type) {
 template <typename T>
 class ScalarIndex : public IndexBase {
  public:
+    ScalarIndex(const std::string& index_type) : IndexBase(index_type) {
+    }
+
     void
     BuildWithRawData(size_t n,
                      const void* values,
@@ -81,6 +84,12 @@ class ScalarIndex : public IndexBase {
 
     virtual const TargetBitmap
     In(size_t n, const T* values) = 0;
+
+    virtual const TargetBitmap
+    IsNull() = 0;
+
+    virtual const TargetBitmap
+    IsNotNull() = 0;
 
     virtual const TargetBitmap
     InApplyFilter(size_t n,
@@ -113,6 +122,16 @@ class ScalarIndex : public IndexBase {
 
     virtual const TargetBitmap
     Query(const DatasetPtr& dataset);
+
+    virtual bool
+    SupportPatternMatch() const {
+        return false;
+    }
+
+    virtual const TargetBitmap
+    PatternMatch(const std::string& pattern) {
+        PanicInfo(Unsupported, "pattern match is not supported");
+    }
 
     virtual int64_t
     Size() = 0;

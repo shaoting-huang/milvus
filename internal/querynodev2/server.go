@@ -17,7 +17,7 @@
 package querynodev2
 
 /*
-#cgo pkg-config: milvus_segcore milvus_common
+#cgo pkg-config: milvus_core
 
 #include "segcore/collection_c.h"
 #include "segcore/segment_c.h"
@@ -34,7 +34,6 @@ import (
 	"path"
 	"path/filepath"
 	"plugin"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -64,7 +63,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/metrics"
 	"github.com/milvus-io/milvus/pkg/mq/msgdispatcher"
 	"github.com/milvus-io/milvus/pkg/util/expr"
-	"github.com/milvus-io/milvus/pkg/util/gc"
 	"github.com/milvus-io/milvus/pkg/util/hardware"
 	"github.com/milvus-io/milvus/pkg/util/lifetime"
 	"github.com/milvus-io/milvus/pkg/util/lock"
@@ -339,22 +337,15 @@ func (node *QueryNode) Init() error {
 				}
 			}
 
-			client, err := grpcquerynodeclient.NewClient(node.ctx, addr, nodeID)
-			if err != nil {
-				return nil, err
-			}
-
-			return cluster.NewRemoteWorker(client), nil
+			return cluster.NewPoolingRemoteWorker(func() (types.QueryNodeClient, error) {
+				return grpcquerynodeclient.NewClient(node.ctx, addr, nodeID)
+			})
 		})
 		node.delegators = typeutil.NewConcurrentMap[string, delegator.ShardDelegator]()
 		node.subscribingChannels = typeutil.NewConcurrentSet[string]()
 		node.unsubscribingChannels = typeutil.NewConcurrentSet[string]()
 		node.manager = segments.NewManager()
-		if paramtable.Get().CommonCfg.EnableStorageV2.GetAsBool() {
-			node.loader = segments.NewLoaderV2(node.manager, node.chunkManager)
-		} else {
-			node.loader = segments.NewLoader(node.manager, node.chunkManager)
-		}
+		node.loader = segments.NewLoader(node.manager, node.chunkManager)
 		node.manager.SetLoader(node.loader)
 		node.dispClient = msgdispatcher.NewClient(node.factory, typeutil.QueryNodeRole, node.GetNodeID())
 		// init pipeline manager
@@ -365,17 +356,6 @@ func (node *QueryNode) Init() error {
 			log.Error("QueryNode init segcore failed", zap.Error(err))
 			initError = err
 			return
-		}
-		if paramtable.Get().QueryNodeCfg.GCEnabled.GetAsBool() {
-			if paramtable.Get().QueryNodeCfg.GCHelperEnabled.GetAsBool() {
-				action := func(GOGC uint32) {
-					debug.SetGCPercent(int(GOGC))
-				}
-				gc.NewTuner(paramtable.Get().QueryNodeCfg.OverloadedMemoryThresholdPercentage.GetAsFloat(), uint32(paramtable.Get().QueryNodeCfg.MinimumGOGCConfig.GetAsInt()), uint32(paramtable.Get().QueryNodeCfg.MaximumGOGCConfig.GetAsInt()), action)
-			} else {
-				action := func(uint32) {}
-				gc.NewTuner(paramtable.Get().QueryNodeCfg.OverloadedMemoryThresholdPercentage.GetAsFloat(), uint32(paramtable.Get().QueryNodeCfg.MinimumGOGCConfig.GetAsInt()), uint32(paramtable.Get().QueryNodeCfg.MaximumGOGCConfig.GetAsInt()), action)
-			}
 		}
 
 		log.Info("query node init successfully",
@@ -396,6 +376,11 @@ func (node *QueryNode) Start() error {
 		paramtable.SetUpdateTime(time.Now())
 		mmapEnabled := paramtable.Get().QueryNodeCfg.MmapEnabled.GetAsBool()
 		growingmmapEnable := paramtable.Get().QueryNodeCfg.GrowingMmapEnabled.GetAsBool()
+		mmapVectorIndex := paramtable.Get().QueryNodeCfg.MmapVectorIndex.GetAsBool()
+		mmapVectorField := paramtable.Get().QueryNodeCfg.MmapVectorField.GetAsBool()
+		mmapScarlarIndex := paramtable.Get().QueryNodeCfg.MmapScalarIndex.GetAsBool()
+		mmapScarlarField := paramtable.Get().QueryNodeCfg.MmapScalarField.GetAsBool()
+
 		node.UpdateStateCode(commonpb.StateCode_Healthy)
 
 		registry.GetInMemoryResolver().RegisterQueryNode(node.GetNodeID(), node)
@@ -404,6 +389,10 @@ func (node *QueryNode) Start() error {
 			zap.String("Address", node.address),
 			zap.Bool("mmapEnabled", mmapEnabled),
 			zap.Bool("growingmmapEnable", growingmmapEnable),
+			zap.Bool("mmapVectorIndex", mmapVectorIndex),
+			zap.Bool("mmapVectorField", mmapVectorField),
+			zap.Bool("mmapScarlarIndex", mmapScarlarIndex),
+			zap.Bool("mmapScarlarField", mmapScarlarField),
 		)
 	})
 

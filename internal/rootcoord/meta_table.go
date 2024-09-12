@@ -31,6 +31,7 @@ import (
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	pb "github.com/milvus-io/milvus/internal/proto/etcdpb"
 	"github.com/milvus-io/milvus/internal/proto/internalpb"
+	"github.com/milvus-io/milvus/internal/proto/rootcoordpb"
 	"github.com/milvus-io/milvus/internal/tso"
 	"github.com/milvus-io/milvus/pkg/common"
 	"github.com/milvus-io/milvus/pkg/log"
@@ -62,7 +63,7 @@ type IMetaTable interface {
 	ListAllAvailCollections(ctx context.Context) map[int64][]int64
 	ListCollectionPhysicalChannels() map[typeutil.UniqueID][]string
 	GetCollectionVirtualChannels(colID int64) []string
-	GetVChannelsByPchannel(pchannel string) []string
+	GetPChannelInfo(pchannel string) *rootcoordpb.GetPChannelInfoResponse
 	AddPartition(ctx context.Context, partition *model.Partition) error
 	ChangePartitionState(ctx context.Context, collectionID UniqueID, partitionID UniqueID, state pb.PartitionState, ts Timestamp) error
 	RemovePartition(ctx context.Context, dbID int64, collectionID UniqueID, partitionID UniqueID, ts Timestamp) error
@@ -96,6 +97,8 @@ type IMetaTable interface {
 	DropGrant(tenant string, role *milvuspb.RoleEntity) error
 	ListPolicy(tenant string) ([]string, error)
 	ListUserRole(tenant string) ([]string, error)
+	BackupRBAC(ctx context.Context, tenant string) (*milvuspb.RBACMeta, error)
+	RestoreRBAC(ctx context.Context, tenant string, meta *milvuspb.RBACMeta) error
 }
 
 // MetaTable is a persistent meta set of all databases, collections and partitions.
@@ -139,8 +142,6 @@ func (mt *MetaTable) reload() error {
 	mt.names = newNameDb()
 	mt.aliases = newNameDb()
 
-	partitionNum := int64(0)
-
 	metrics.RootCoordNumOfCollections.Reset()
 	metrics.RootCoordNumOfPartitions.Reset()
 	metrics.RootCoordNumOfDatabases.Set(0)
@@ -174,12 +175,14 @@ func (mt *MetaTable) reload() error {
 
 	// recover collections from db namespace
 	for dbName, db := range mt.dbName2Meta {
+		partitionNum := int64(0)
+		collectionNum := int64(0)
+
 		mt.names.createDbIfNotExist(dbName)
 		collections, err := mt.catalog.ListCollections(mt.ctx, db.ID, typeutil.MaxTimestamp)
 		if err != nil {
 			return err
 		}
-		collectionNum := int64(0)
 		for _, collection := range collections {
 			mt.collID2Meta[collection.CollectionID] = collection
 			if collection.Available() {
@@ -191,6 +194,7 @@ func (mt *MetaTable) reload() error {
 
 		metrics.RootCoordNumOfDatabases.Inc()
 		metrics.RootCoordNumOfCollections.WithLabelValues(dbName).Add(float64(collectionNum))
+		metrics.RootCoordNumOfPartitions.WithLabelValues().Add(float64(partitionNum))
 		log.Info("collections recovered from db", zap.String("db_name", dbName),
 			zap.Int64("collection_num", collectionNum),
 			zap.Int64("partition_num", partitionNum))
@@ -207,8 +211,6 @@ func (mt *MetaTable) reload() error {
 			mt.aliases.insert(dbName, alias.Name, alias.CollectionID)
 		}
 	}
-
-	metrics.RootCoordNumOfPartitions.WithLabelValues().Add(float64(partitionNum))
 	log.Info("RootCoord meta table reload done", zap.Duration("duration", record.ElapseSpan()))
 	return nil
 }
@@ -835,17 +837,30 @@ func (mt *MetaTable) GetCollectionVirtualChannels(colID int64) []string {
 	return nil
 }
 
-// GetVChannelsByPchannel returns vchannels by the given pchannel.
-func (mt *MetaTable) GetVChannelsByPchannel(pchannel string) []string {
+// GetPChannelInfo returns infos on pchannel.
+func (mt *MetaTable) GetPChannelInfo(pchannel string) *rootcoordpb.GetPChannelInfoResponse {
 	mt.ddLock.RLock()
 	defer mt.ddLock.RUnlock()
-	res := make([]string, 0)
+	resp := &rootcoordpb.GetPChannelInfoResponse{
+		Status:      merr.Success(),
+		Collections: make([]*rootcoordpb.CollectionInfoOnPChannel, 0),
+	}
 	for _, collInfo := range mt.collID2Meta {
-		if idx := lo.IndexOf(collInfo.PhysicalChannelNames, pchannel); idx > 0 {
-			res = append(res, collInfo.VirtualChannelNames[idx])
+		if idx := lo.IndexOf(collInfo.PhysicalChannelNames, pchannel); idx >= 0 {
+			partitions := make([]*rootcoordpb.PartitionInfoOnPChannel, 0, len(collInfo.Partitions))
+			for _, part := range collInfo.Partitions {
+				partitions = append(partitions, &rootcoordpb.PartitionInfoOnPChannel{
+					PartitionId: part.PartitionID,
+				})
+			}
+			resp.Collections = append(resp.Collections, &rootcoordpb.CollectionInfoOnPChannel{
+				CollectionId: collInfo.CollectionID,
+				Partitions:   partitions,
+				Vchannel:     collInfo.VirtualChannelNames[idx],
+			})
 		}
 	}
-	return res
+	return resp
 }
 
 func (mt *MetaTable) AddPartition(ctx context.Context, partition *model.Partition) error {
@@ -1420,4 +1435,18 @@ func (mt *MetaTable) ListUserRole(tenant string) ([]string, error) {
 	defer mt.permissionLock.RUnlock()
 
 	return mt.catalog.ListUserRole(mt.ctx, tenant)
+}
+
+func (mt *MetaTable) BackupRBAC(ctx context.Context, tenant string) (*milvuspb.RBACMeta, error) {
+	mt.permissionLock.RLock()
+	defer mt.permissionLock.RUnlock()
+
+	return mt.catalog.BackupRBAC(mt.ctx, tenant)
+}
+
+func (mt *MetaTable) RestoreRBAC(ctx context.Context, tenant string, meta *milvuspb.RBACMeta) error {
+	mt.permissionLock.Lock()
+	defer mt.permissionLock.Unlock()
+
+	return mt.catalog.RestoreRBAC(mt.ctx, tenant, meta)
 }

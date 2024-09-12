@@ -1137,7 +1137,7 @@ func Test_InsertTaskcheckFieldsDataBySchema(t *testing.T) {
 				Fields:      []*schemapb.FieldSchema{},
 			},
 			insertMsg: &BaseInsertTask{
-				InsertRequest: msgpb.InsertRequest{
+				InsertRequest: &msgpb.InsertRequest{
 					Base: &commonpb.MsgBase{
 						MsgType: commonpb.MsgType_Insert,
 					},
@@ -1170,7 +1170,7 @@ func Test_InsertTaskcheckFieldsDataBySchema(t *testing.T) {
 				},
 			},
 			insertMsg: &BaseInsertTask{
-				InsertRequest: msgpb.InsertRequest{
+				InsertRequest: &msgpb.InsertRequest{
 					Base: &commonpb.MsgBase{
 						MsgType: commonpb.MsgType_Insert,
 					},
@@ -1211,7 +1211,7 @@ func Test_InsertTaskcheckFieldsDataBySchema(t *testing.T) {
 				},
 			},
 			insertMsg: &BaseInsertTask{
-				InsertRequest: msgpb.InsertRequest{
+				InsertRequest: &msgpb.InsertRequest{
 					Base: &commonpb.MsgBase{
 						MsgType: commonpb.MsgType_Insert,
 					},
@@ -1241,7 +1241,7 @@ func Test_InsertTaskcheckFieldsDataBySchema(t *testing.T) {
 				},
 			},
 			insertMsg: &BaseInsertTask{
-				InsertRequest: msgpb.InsertRequest{
+				InsertRequest: &msgpb.InsertRequest{
 					Base: &commonpb.MsgBase{
 						MsgType: commonpb.MsgType_Insert,
 					},
@@ -1270,7 +1270,7 @@ func Test_InsertTaskcheckFieldsDataBySchema(t *testing.T) {
 				},
 			},
 			insertMsg: &BaseInsertTask{
-				InsertRequest: msgpb.InsertRequest{
+				InsertRequest: &msgpb.InsertRequest{
 					Base: &commonpb.MsgBase{
 						MsgType: commonpb.MsgType_Insert,
 					},
@@ -1298,7 +1298,7 @@ func Test_InsertTaskcheckFieldsDataBySchema(t *testing.T) {
 				},
 			},
 			insertMsg: &BaseInsertTask{
-				InsertRequest: msgpb.InsertRequest{
+				InsertRequest: &msgpb.InsertRequest{
 					Base: &commonpb.MsgBase{
 						MsgType: commonpb.MsgType_Insert,
 					},
@@ -1332,7 +1332,7 @@ func Test_InsertTaskcheckFieldsDataBySchema(t *testing.T) {
 				},
 			},
 			insertMsg: &BaseInsertTask{
-				InsertRequest: msgpb.InsertRequest{
+				InsertRequest: &msgpb.InsertRequest{
 					Base: &commonpb.MsgBase{
 						MsgType: commonpb.MsgType_Insert,
 					},
@@ -1376,7 +1376,7 @@ func Test_InsertTaskcheckFieldsDataBySchema(t *testing.T) {
 				},
 			},
 			insertMsg: &BaseInsertTask{
-				InsertRequest: msgpb.InsertRequest{
+				InsertRequest: &msgpb.InsertRequest{
 					Base: &commonpb.MsgBase{
 						MsgType: commonpb.MsgType_Insert,
 					},
@@ -1410,7 +1410,7 @@ func Test_InsertTaskcheckFieldsDataBySchema(t *testing.T) {
 				},
 			},
 			insertMsg: &BaseInsertTask{
-				InsertRequest: msgpb.InsertRequest{
+				InsertRequest: &msgpb.InsertRequest{
 					Base: &commonpb.MsgBase{
 						MsgType: commonpb.MsgType_Insert,
 					},
@@ -1443,7 +1443,7 @@ func Test_InsertTaskcheckFieldsDataBySchema(t *testing.T) {
 				},
 			},
 			insertMsg: &BaseInsertTask{
-				InsertRequest: msgpb.InsertRequest{
+				InsertRequest: &msgpb.InsertRequest{
 					Base: &commonpb.MsgBase{
 						MsgType: commonpb.MsgType_Insert,
 					},
@@ -1476,7 +1476,7 @@ func Test_InsertTaskcheckFieldsDataBySchema(t *testing.T) {
 				},
 			},
 			insertMsg: &BaseInsertTask{
-				InsertRequest: msgpb.InsertRequest{
+				InsertRequest: &msgpb.InsertRequest{
 					Base: &commonpb.MsgBase{
 						MsgType: commonpb.MsgType_Insert,
 					},
@@ -1518,7 +1518,7 @@ func Test_InsertTaskcheckFieldsDataBySchema(t *testing.T) {
 				},
 			},
 			insertMsg: &BaseInsertTask{
-				InsertRequest: msgpb.InsertRequest{
+				InsertRequest: &msgpb.InsertRequest{
 					Base: &commonpb.MsgBase{
 						MsgType: commonpb.MsgType_Insert,
 					},
@@ -1560,7 +1560,7 @@ func Test_InsertTaskcheckFieldsDataBySchema(t *testing.T) {
 				},
 			},
 			insertMsg: &BaseInsertTask{
-				InsertRequest: msgpb.InsertRequest{
+				InsertRequest: &msgpb.InsertRequest{
 					Base: &commonpb.MsgBase{
 						MsgType: commonpb.MsgType_Insert,
 					},
@@ -1603,7 +1603,7 @@ func Test_InsertTaskcheckFieldsDataBySchema(t *testing.T) {
 				},
 			},
 			insertMsg: &BaseInsertTask{
-				InsertRequest: msgpb.InsertRequest{
+				InsertRequest: &msgpb.InsertRequest{
 					Base: &commonpb.MsgBase{
 						MsgType: commonpb.MsgType_Insert,
 					},
@@ -1639,7 +1639,7 @@ func Test_InsertTaskCheckPrimaryFieldData(t *testing.T) {
 			Fields:      []*schemapb.FieldSchema{},
 		},
 		insertMsg: &BaseInsertTask{
-			InsertRequest: msgpb.InsertRequest{
+			InsertRequest: &msgpb.InsertRequest{
 				Base: &commonpb.MsgBase{
 					MsgType: commonpb.MsgType_Insert,
 				},
@@ -1653,7 +1653,7 @@ func Test_InsertTaskCheckPrimaryFieldData(t *testing.T) {
 		},
 	}
 
-	_, err := checkPrimaryFieldData(case1.schema, case1.insertMsg, true)
+	_, err := checkPrimaryFieldData(case1.schema, case1.insertMsg)
 	assert.NotEqual(t, nil, err)
 
 	// the num of passed fields is less than needed
@@ -1674,7 +1674,7 @@ func Test_InsertTaskCheckPrimaryFieldData(t *testing.T) {
 			},
 		},
 		insertMsg: &BaseInsertTask{
-			InsertRequest: msgpb.InsertRequest{
+			InsertRequest: &msgpb.InsertRequest{
 				Base: &commonpb.MsgBase{
 					MsgType: commonpb.MsgType_Insert,
 				},
@@ -1694,7 +1694,7 @@ func Test_InsertTaskCheckPrimaryFieldData(t *testing.T) {
 			Status: merr.Success(),
 		},
 	}
-	_, err = checkPrimaryFieldData(case2.schema, case2.insertMsg, true)
+	_, err = checkPrimaryFieldData(case2.schema, case2.insertMsg)
 	assert.NotEqual(t, nil, err)
 
 	// autoID == false, no primary field schema
@@ -1716,7 +1716,7 @@ func Test_InsertTaskCheckPrimaryFieldData(t *testing.T) {
 			},
 		},
 		insertMsg: &BaseInsertTask{
-			InsertRequest: msgpb.InsertRequest{
+			InsertRequest: &msgpb.InsertRequest{
 				Base: &commonpb.MsgBase{
 					MsgType: commonpb.MsgType_Insert,
 				},
@@ -1734,7 +1734,7 @@ func Test_InsertTaskCheckPrimaryFieldData(t *testing.T) {
 			Status: merr.Success(),
 		},
 	}
-	_, err = checkPrimaryFieldData(case3.schema, case3.insertMsg, true)
+	_, err = checkPrimaryFieldData(case3.schema, case3.insertMsg)
 	assert.NotEqual(t, nil, err)
 
 	// autoID == true, has primary field schema, but primary field data exist
@@ -1758,7 +1758,7 @@ func Test_InsertTaskCheckPrimaryFieldData(t *testing.T) {
 			},
 		},
 		insertMsg: &BaseInsertTask{
-			InsertRequest: msgpb.InsertRequest{
+			InsertRequest: &msgpb.InsertRequest{
 				Base: &commonpb.MsgBase{
 					MsgType: commonpb.MsgType_Insert,
 				},
@@ -1781,7 +1781,7 @@ func Test_InsertTaskCheckPrimaryFieldData(t *testing.T) {
 	case4.schema.Fields[0].IsPrimaryKey = true
 	case4.schema.Fields[0].AutoID = true
 	case4.insertMsg.FieldsData[0] = newScalarFieldData(case4.schema.Fields[0], case4.schema.Fields[0].Name, 10)
-	_, err = checkPrimaryFieldData(case4.schema, case4.insertMsg, true)
+	_, err = checkPrimaryFieldData(case4.schema, case4.insertMsg)
 	assert.NotEqual(t, nil, err)
 
 	// autoID == true, has primary field schema, but DataType don't match
@@ -1789,7 +1789,7 @@ func Test_InsertTaskCheckPrimaryFieldData(t *testing.T) {
 	case4.schema.Fields[0].IsPrimaryKey = false
 	case4.schema.Fields[1].IsPrimaryKey = true
 	case4.schema.Fields[1].AutoID = true
-	_, err = checkPrimaryFieldData(case4.schema, case4.insertMsg, true)
+	_, err = checkPrimaryFieldData(case4.schema, case4.insertMsg)
 	assert.NotEqual(t, nil, err)
 }
 
@@ -1804,7 +1804,7 @@ func Test_UpsertTaskCheckPrimaryFieldData(t *testing.T) {
 				Fields:      []*schemapb.FieldSchema{},
 			},
 			insertMsg: &BaseInsertTask{
-				InsertRequest: msgpb.InsertRequest{
+				InsertRequest: &msgpb.InsertRequest{
 					Base: &commonpb.MsgBase{
 						MsgType: commonpb.MsgType_Insert,
 					},
@@ -1817,7 +1817,7 @@ func Test_UpsertTaskCheckPrimaryFieldData(t *testing.T) {
 				Status: merr.Success(),
 			},
 		}
-		_, err := checkPrimaryFieldData(task.schema, task.insertMsg, false)
+		_, _, err := checkUpsertPrimaryFieldData(task.schema, task.insertMsg)
 		assert.NotEqual(t, nil, err)
 	})
 
@@ -1841,7 +1841,7 @@ func Test_UpsertTaskCheckPrimaryFieldData(t *testing.T) {
 				},
 			},
 			insertMsg: &BaseInsertTask{
-				InsertRequest: msgpb.InsertRequest{
+				InsertRequest: &msgpb.InsertRequest{
 					Base: &commonpb.MsgBase{
 						MsgType: commonpb.MsgType_Insert,
 					},
@@ -1861,7 +1861,7 @@ func Test_UpsertTaskCheckPrimaryFieldData(t *testing.T) {
 				Status: merr.Success(),
 			},
 		}
-		_, err := checkPrimaryFieldData(task.schema, task.insertMsg, false)
+		_, _, err := checkUpsertPrimaryFieldData(task.schema, task.insertMsg)
 		assert.NotEqual(t, nil, err)
 	})
 
@@ -1884,7 +1884,7 @@ func Test_UpsertTaskCheckPrimaryFieldData(t *testing.T) {
 				},
 			},
 			insertMsg: &BaseInsertTask{
-				InsertRequest: msgpb.InsertRequest{
+				InsertRequest: &msgpb.InsertRequest{
 					Base: &commonpb.MsgBase{
 						MsgType: commonpb.MsgType_Insert,
 					},
@@ -1902,7 +1902,7 @@ func Test_UpsertTaskCheckPrimaryFieldData(t *testing.T) {
 				Status: merr.Success(),
 			},
 		}
-		_, err := checkPrimaryFieldData(task.schema, task.insertMsg, false)
+		_, _, err := checkUpsertPrimaryFieldData(task.schema, task.insertMsg)
 		assert.NotEqual(t, nil, err)
 	})
 
@@ -1929,7 +1929,7 @@ func Test_UpsertTaskCheckPrimaryFieldData(t *testing.T) {
 				},
 			},
 			insertMsg: &BaseInsertTask{
-				InsertRequest: msgpb.InsertRequest{
+				InsertRequest: &msgpb.InsertRequest{
 					Base: &commonpb.MsgBase{
 						MsgType: commonpb.MsgType_Insert,
 					},
@@ -1947,7 +1947,7 @@ func Test_UpsertTaskCheckPrimaryFieldData(t *testing.T) {
 				Status: merr.Success(),
 			},
 		}
-		_, err := checkPrimaryFieldData(task.schema, task.insertMsg, false)
+		_, _, err := checkUpsertPrimaryFieldData(task.schema, task.insertMsg)
 		assert.NotEqual(t, nil, err)
 	})
 
@@ -1974,7 +1974,7 @@ func Test_UpsertTaskCheckPrimaryFieldData(t *testing.T) {
 				},
 			},
 			insertMsg: &BaseInsertTask{
-				InsertRequest: msgpb.InsertRequest{
+				InsertRequest: &msgpb.InsertRequest{
 					Base: &commonpb.MsgBase{
 						MsgType: commonpb.MsgType_Insert,
 					},
@@ -1998,7 +1998,7 @@ func Test_UpsertTaskCheckPrimaryFieldData(t *testing.T) {
 				Status: merr.Success(),
 			},
 		}
-		_, err := checkPrimaryFieldData(task.schema, task.insertMsg, false)
+		_, _, err := checkUpsertPrimaryFieldData(task.schema, task.insertMsg)
 		assert.NotEqual(t, nil, err)
 	})
 
@@ -2020,7 +2020,7 @@ func Test_UpsertTaskCheckPrimaryFieldData(t *testing.T) {
 				},
 			},
 			insertMsg: &BaseInsertTask{
-				InsertRequest: msgpb.InsertRequest{
+				InsertRequest: &msgpb.InsertRequest{
 					Base: &commonpb.MsgBase{
 						MsgType: commonpb.MsgType_Insert,
 					},
@@ -2039,7 +2039,7 @@ func Test_UpsertTaskCheckPrimaryFieldData(t *testing.T) {
 				Status: merr.Success(),
 			},
 		}
-		_, err := checkPrimaryFieldData(task.schema, task.insertMsg, false)
+		_, _, err := checkUpsertPrimaryFieldData(task.schema, task.insertMsg)
 		assert.NoError(t, nil, err)
 
 		// autoid==false
@@ -2059,7 +2059,7 @@ func Test_UpsertTaskCheckPrimaryFieldData(t *testing.T) {
 				},
 			},
 			insertMsg: &BaseInsertTask{
-				InsertRequest: msgpb.InsertRequest{
+				InsertRequest: &msgpb.InsertRequest{
 					Base: &commonpb.MsgBase{
 						MsgType: commonpb.MsgType_Insert,
 					},
@@ -2078,7 +2078,7 @@ func Test_UpsertTaskCheckPrimaryFieldData(t *testing.T) {
 				Status: merr.Success(),
 			},
 		}
-		_, err = checkPrimaryFieldData(task.schema, task.insertMsg, false)
+		_, _, err = checkUpsertPrimaryFieldData(task.schema, task.insertMsg)
 		assert.NoError(t, nil, err)
 	})
 
@@ -2100,7 +2100,7 @@ func Test_UpsertTaskCheckPrimaryFieldData(t *testing.T) {
 				},
 			},
 			insertMsg: &BaseInsertTask{
-				InsertRequest: msgpb.InsertRequest{
+				InsertRequest: &msgpb.InsertRequest{
 					Base: &commonpb.MsgBase{
 						MsgType: commonpb.MsgType_Insert,
 					},
@@ -2129,7 +2129,7 @@ func Test_UpsertTaskCheckPrimaryFieldData(t *testing.T) {
 				Status: merr.Success(),
 			},
 		}
-		_, err := checkPrimaryFieldData(task.schema, task.insertMsg, false)
+		_, _, err := checkUpsertPrimaryFieldData(task.schema, task.insertMsg)
 		newPK := task.insertMsg.FieldsData[0].GetScalars().GetLongData().GetData()
 		assert.Equal(t, newPK, task.insertMsg.RowIDs)
 		assert.NoError(t, nil, err)
@@ -2230,7 +2230,7 @@ func Test_CheckDynamicFieldData(t *testing.T) {
 		jsonFieldData := autoGenDynamicFieldData(jsonData)
 		schema := newTestSchema()
 		insertMsg := &msgstream.InsertMsg{
-			InsertRequest: msgpb.InsertRequest{
+			InsertRequest: &msgpb.InsertRequest{
 				CollectionName: "collectionName",
 				FieldsData:     []*schemapb.FieldData{jsonFieldData},
 				NumRows:        1,
@@ -2259,7 +2259,7 @@ func Test_CheckDynamicFieldData(t *testing.T) {
 		jsonFieldData := autoGenDynamicFieldData(jsonData)
 		schema := newTestSchema()
 		insertMsg := &msgstream.InsertMsg{
-			InsertRequest: msgpb.InsertRequest{
+			InsertRequest: &msgpb.InsertRequest{
 				CollectionName: "collectionName",
 				FieldsData:     []*schemapb.FieldData{jsonFieldData},
 				NumRows:        1,
@@ -2287,7 +2287,7 @@ func Test_CheckDynamicFieldData(t *testing.T) {
 		jsonFieldData := autoGenDynamicFieldData(jsonData)
 		schema := newTestSchema()
 		insertMsg := &msgstream.InsertMsg{
-			InsertRequest: msgpb.InsertRequest{
+			InsertRequest: &msgpb.InsertRequest{
 				CollectionName: "collectionName",
 				FieldsData:     []*schemapb.FieldData{jsonFieldData},
 				NumRows:        1,
@@ -2303,7 +2303,7 @@ func Test_CheckDynamicFieldData(t *testing.T) {
 		jsonFieldData := autoGenDynamicFieldData([][]byte{[]byte(data)})
 		schema := newTestSchema()
 		insertMsg := &msgstream.InsertMsg{
-			InsertRequest: msgpb.InsertRequest{
+			InsertRequest: &msgpb.InsertRequest{
 				CollectionName: "collectionName",
 				FieldsData:     []*schemapb.FieldData{jsonFieldData},
 				NumRows:        1,
@@ -2316,7 +2316,7 @@ func Test_CheckDynamicFieldData(t *testing.T) {
 	t.Run("no json data", func(t *testing.T) {
 		schema := newTestSchema()
 		insertMsg := &msgstream.InsertMsg{
-			InsertRequest: msgpb.InsertRequest{
+			InsertRequest: &msgpb.InsertRequest{
 				CollectionName: "collectionName",
 				FieldsData:     []*schemapb.FieldData{},
 				NumRows:        1,
@@ -2471,4 +2471,165 @@ func TestGetCostValue(t *testing.T) {
 		})
 		assert.Equal(t, 100, cost)
 	})
+}
+
+func TestValidateLoadFieldsList(t *testing.T) {
+	type testCase struct {
+		tag       string
+		schema    *schemapb.CollectionSchema
+		expectErr bool
+	}
+
+	rowIDField := &schemapb.FieldSchema{
+		FieldID:  common.RowIDField,
+		Name:     common.RowIDFieldName,
+		DataType: schemapb.DataType_Int64,
+	}
+	timestampField := &schemapb.FieldSchema{
+		FieldID:  common.TimeStampField,
+		Name:     common.TimeStampFieldName,
+		DataType: schemapb.DataType_Int64,
+	}
+	pkField := &schemapb.FieldSchema{
+		FieldID:      common.StartOfUserFieldID,
+		Name:         "pk",
+		DataType:     schemapb.DataType_Int64,
+		IsPrimaryKey: true,
+	}
+	scalarField := &schemapb.FieldSchema{
+		FieldID:  common.StartOfUserFieldID + 1,
+		Name:     "text",
+		DataType: schemapb.DataType_VarChar,
+	}
+	partitionKeyField := &schemapb.FieldSchema{
+		FieldID:        common.StartOfUserFieldID + 2,
+		Name:           "part_key",
+		DataType:       schemapb.DataType_Int64,
+		IsPartitionKey: true,
+	}
+	vectorField := &schemapb.FieldSchema{
+		FieldID:  common.StartOfUserFieldID + 3,
+		Name:     "vector",
+		DataType: schemapb.DataType_FloatVector,
+		TypeParams: []*commonpb.KeyValuePair{
+			{Key: common.DimKey, Value: "768"},
+		},
+	}
+	dynamicField := &schemapb.FieldSchema{
+		FieldID:   common.StartOfUserFieldID + 4,
+		Name:      common.MetaFieldName,
+		DataType:  schemapb.DataType_JSON,
+		IsDynamic: true,
+	}
+	clusteringKeyField := &schemapb.FieldSchema{
+		FieldID:         common.StartOfUserFieldID + 5,
+		Name:            common.MetaFieldName,
+		DataType:        schemapb.DataType_Int32,
+		IsClusteringKey: true,
+	}
+
+	addSkipLoadAttr := func(f *schemapb.FieldSchema, flag bool) *schemapb.FieldSchema {
+		result := typeutil.Clone(f)
+		result.TypeParams = append(f.TypeParams, &commonpb.KeyValuePair{
+			Key:   common.FieldSkipLoadKey,
+			Value: strconv.FormatBool(flag),
+		})
+		return result
+	}
+
+	testCases := []testCase{
+		{
+			tag: "default",
+			schema: &schemapb.CollectionSchema{
+				EnableDynamicField: true,
+				Fields: []*schemapb.FieldSchema{
+					rowIDField,
+					timestampField,
+					pkField,
+					scalarField,
+					partitionKeyField,
+					vectorField,
+					dynamicField,
+					clusteringKeyField,
+				},
+			},
+			expectErr: false,
+		},
+		{
+			tag: "pk_not_loaded",
+			schema: &schemapb.CollectionSchema{
+				EnableDynamicField: true,
+				Fields: []*schemapb.FieldSchema{
+					rowIDField,
+					timestampField,
+					addSkipLoadAttr(pkField, true),
+					scalarField,
+					partitionKeyField,
+					vectorField,
+					dynamicField,
+				},
+			},
+			expectErr: true,
+		},
+		{
+			tag: "part_key_not_loaded",
+			schema: &schemapb.CollectionSchema{
+				EnableDynamicField: true,
+				Fields: []*schemapb.FieldSchema{
+					rowIDField,
+					timestampField,
+					addSkipLoadAttr(pkField, true),
+					scalarField,
+					partitionKeyField,
+					vectorField,
+					dynamicField,
+				},
+			},
+			expectErr: true,
+		},
+		{
+			tag: "vector_not_loaded",
+			schema: &schemapb.CollectionSchema{
+				EnableDynamicField: true,
+				Fields: []*schemapb.FieldSchema{
+					rowIDField,
+					timestampField,
+					pkField,
+					scalarField,
+					partitionKeyField,
+					addSkipLoadAttr(vectorField, true),
+					dynamicField,
+				},
+			},
+			expectErr: true,
+		},
+		{
+			tag: "clustering_key_not_loaded",
+			schema: &schemapb.CollectionSchema{
+				EnableDynamicField: true,
+				Fields: []*schemapb.FieldSchema{
+					rowIDField,
+					timestampField,
+					pkField,
+					scalarField,
+					partitionKeyField,
+					vectorField,
+					dynamicField,
+					addSkipLoadAttr(clusteringKeyField, true),
+				},
+			},
+			expectErr: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.tag, func(t *testing.T) {
+			err := validateLoadFieldsList(tc.schema)
+			if tc.expectErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
 }

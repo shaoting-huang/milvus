@@ -23,10 +23,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/golang/protobuf/proto"
 	"go.uber.org/zap"
 	"golang.org/x/exp/maps"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
@@ -921,5 +921,42 @@ func (kc *Catalog) GetCurrentPartitionStatsVersion(ctx context.Context, collID, 
 
 func (kc *Catalog) DropCurrentPartitionStatsVersion(ctx context.Context, collID, partID int64, vChannel string) error {
 	key := buildCurrentPartitionStatsVersionPath(collID, partID, vChannel)
+	return kc.MetaKv.Remove(key)
+}
+
+func (kc *Catalog) ListStatsTasks(ctx context.Context) ([]*indexpb.StatsTask, error) {
+	tasks := make([]*indexpb.StatsTask, 0)
+	_, values, err := kc.MetaKv.LoadWithPrefix(StatsTaskPrefix)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, value := range values {
+		task := &indexpb.StatsTask{}
+		err = proto.Unmarshal([]byte(value), task)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, task)
+	}
+	return tasks, nil
+}
+
+func (kc *Catalog) SaveStatsTask(ctx context.Context, task *indexpb.StatsTask) error {
+	key := buildStatsTaskKey(task.TaskID)
+	value, err := proto.Marshal(task)
+	if err != nil {
+		return err
+	}
+
+	err = kc.MetaKv.Save(key, string(value))
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (kc *Catalog) DropStatsTask(ctx context.Context, taskID typeutil.UniqueID) error {
+	key := buildStatsTaskKey(taskID)
 	return kc.MetaKv.Remove(key)
 }

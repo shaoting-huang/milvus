@@ -47,6 +47,7 @@ import (
 	"github.com/milvus-io/milvus/internal/querycoordv2/session"
 	"github.com/milvus-io/milvus/internal/querycoordv2/task"
 	"github.com/milvus-io/milvus/internal/querycoordv2/utils"
+	"github.com/milvus-io/milvus/internal/util/proxyutil"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
 	"github.com/milvus-io/milvus/pkg/kv"
 	"github.com/milvus-io/milvus/pkg/util/etcd"
@@ -86,6 +87,8 @@ type ServiceSuite struct {
 	distMgr        *meta.DistributionManager
 	distController *dist.MockController
 
+	proxyManager *proxyutil.MockProxyClientManager
+
 	// Test object
 	server *Server
 }
@@ -124,6 +127,9 @@ func (suite *ServiceSuite) SetupSuite() {
 		1, 2, 3, 4, 5,
 		101, 102, 103, 104, 105,
 	}
+
+	suite.proxyManager = proxyutil.NewMockProxyClientManager(suite.T())
+	suite.proxyManager.EXPECT().InvalidateCollectionMetaCache(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 }
 
 func (suite *ServiceSuite) SetupTest() {
@@ -185,6 +191,7 @@ func (suite *ServiceSuite) SetupTest() {
 		suite.targetMgr,
 		suite.targetObserver,
 		&checkers.CheckerController{},
+		suite.proxyManager,
 	)
 	suite.collectionObserver.Start()
 
@@ -1077,8 +1084,6 @@ func (suite *ServiceSuite) TestReleasePartition() {
 func (suite *ServiceSuite) TestRefreshCollection() {
 	server := suite.server
 
-	server.collectionObserver.Start()
-
 	// Test refresh all collections.
 	for _, collection := range suite.collections {
 		err := server.refreshCollection(collection)
@@ -1610,44 +1615,65 @@ func (suite *ServiceSuite) TestGetReplicasWhenNoAvailableNodes() {
 }
 
 func (suite *ServiceSuite) TestCheckHealth() {
+	suite.loadAll()
 	ctx := context.Background()
 	server := suite.server
 
+	assertCheckHealthResult := func(isHealthy bool) {
+		resp, err := server.CheckHealth(ctx, &milvuspb.CheckHealthRequest{})
+		suite.NoError(err)
+		suite.Equal(resp.IsHealthy, isHealthy)
+		if !isHealthy {
+			suite.NotEmpty(resp.Reasons)
+		} else {
+			suite.Empty(resp.Reasons)
+		}
+	}
+
+	setNodeSate := func(state commonpb.StateCode) {
+		// Test for components state fail
+		suite.cluster.EXPECT().GetComponentStates(mock.Anything, mock.Anything).Unset()
+		suite.cluster.EXPECT().GetComponentStates(mock.Anything, mock.Anything).Return(
+			&milvuspb.ComponentStates{
+				State:  &milvuspb.ComponentInfo{StateCode: state},
+				Status: &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success},
+			},
+			nil).Maybe()
+	}
+
 	// Test for server is not healthy
 	server.UpdateStateCode(commonpb.StateCode_Initializing)
-	resp, err := server.CheckHealth(ctx, &milvuspb.CheckHealthRequest{})
-	suite.NoError(err)
-	suite.Equal(resp.IsHealthy, false)
-	suite.NotEmpty(resp.Reasons)
+	assertCheckHealthResult(false)
 
 	// Test for components state fail
-	for _, node := range suite.nodes {
-		suite.cluster.EXPECT().GetComponentStates(mock.Anything, node).Return(
-			&milvuspb.ComponentStates{
-				State:  &milvuspb.ComponentInfo{StateCode: commonpb.StateCode_Abnormal},
-				Status: &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success},
-			},
-			nil).Once()
-	}
+	setNodeSate(commonpb.StateCode_Abnormal)
 	server.UpdateStateCode(commonpb.StateCode_Healthy)
-	resp, err = server.CheckHealth(ctx, &milvuspb.CheckHealthRequest{})
-	suite.NoError(err)
-	suite.Equal(resp.IsHealthy, false)
-	suite.NotEmpty(resp.Reasons)
+	assertCheckHealthResult(false)
 
-	// Test for server is healthy
-	for _, node := range suite.nodes {
-		suite.cluster.EXPECT().GetComponentStates(mock.Anything, node).Return(
-			&milvuspb.ComponentStates{
-				State:  &milvuspb.ComponentInfo{StateCode: commonpb.StateCode_Healthy},
-				Status: &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success},
-			},
-			nil).Once()
+	// Test for check load percentage fail
+	setNodeSate(commonpb.StateCode_Healthy)
+	assertCheckHealthResult(true)
+
+	// Test for check channel ok
+	for _, collection := range suite.collections {
+		suite.updateCollectionStatus(collection, querypb.LoadStatus_Loaded)
+		suite.updateChannelDist(collection)
 	}
-	resp, err = server.CheckHealth(ctx, &milvuspb.CheckHealthRequest{})
-	suite.NoError(err)
-	suite.Equal(resp.IsHealthy, true)
-	suite.Empty(resp.Reasons)
+	assertCheckHealthResult(true)
+
+	// Test for check channel fail
+	tm := meta.NewMockTargetManager(suite.T())
+	tm.EXPECT().GetDmChannelsByCollection(mock.Anything, mock.Anything).Return(nil).Maybe()
+	otm := server.targetMgr
+	server.targetMgr = tm
+	assertCheckHealthResult(true)
+
+	// Test for get shard leader fail
+	server.targetMgr = otm
+	for _, node := range suite.nodes {
+		suite.nodeMgr.Stopping(node)
+	}
+	assertCheckHealthResult(true)
 }
 
 func (suite *ServiceSuite) TestGetShardLeaders() {
@@ -2009,9 +2035,10 @@ func (suite *ServiceSuite) updateChannelDistWithoutSegment(collection int64) {
 				ChannelName:  channels[i],
 			}))
 			suite.dist.LeaderViewManager.Update(node, &meta.LeaderView{
-				ID:           node,
-				CollectionID: collection,
-				Channel:      channels[i],
+				ID:                 node,
+				CollectionID:       collection,
+				Channel:            channels[i],
+				UnServiceableError: merr.ErrSegmentLack,
 			})
 			i++
 			if i >= len(channels) {

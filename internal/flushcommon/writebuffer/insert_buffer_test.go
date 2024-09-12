@@ -53,7 +53,7 @@ func (s *InsertBufferSuite) composeInsertMsg(rowCount int, dim int) ([]int64, *m
 	})
 	flatten := lo.Flatten(vectors)
 	return tss, &msgstream.InsertMsg{
-		InsertRequest: msgpb.InsertRequest{
+		InsertRequest: &msgpb.InsertRequest{
 			Version:    msgpb.InsertDataVersion_ColumnBased,
 			RowIDs:     tss,
 			Timestamps: lo.Map(tss, func(id int64, _ int) uint64 { return uint64(id) }),
@@ -142,7 +142,7 @@ func (s *InsertBufferSuite) TestBuffer() {
 	memSize := insertBuffer.Buffer(groups[0], &msgpb.MsgPosition{Timestamp: 100}, &msgpb.MsgPosition{Timestamp: 200})
 
 	s.EqualValues(100, insertBuffer.MinTimestamp())
-	s.EqualValues(5364, memSize)
+	s.EqualValues(5367, memSize)
 }
 
 func (s *InsertBufferSuite) TestYield() {

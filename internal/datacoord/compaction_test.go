@@ -17,14 +17,19 @@
 package datacoord
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/errors"
 	"github.com/samber/lo"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 
+	"github.com/milvus-io/milvus/internal/datacoord/allocator"
+	"github.com/milvus-io/milvus/internal/datacoord/session"
 	"github.com/milvus-io/milvus/internal/metastore/kv/binlog"
+	"github.com/milvus-io/milvus/internal/metastore/kv/datacoord"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/util/metautil"
 	"github.com/milvus-io/milvus/pkg/util/typeutil"
@@ -38,18 +43,18 @@ type CompactionPlanHandlerSuite struct {
 	suite.Suite
 
 	mockMeta    *MockCompactionMeta
-	mockAlloc   *NMockAllocator
+	mockAlloc   *allocator.MockAllocator
 	mockCm      *MockChannelManager
-	mockSessMgr *MockSessionManager
+	mockSessMgr *session.MockDataNodeManager
 	handler     *compactionPlanHandler
 	cluster     Cluster
 }
 
 func (s *CompactionPlanHandlerSuite) SetupTest() {
 	s.mockMeta = NewMockCompactionMeta(s.T())
-	s.mockAlloc = NewNMockAllocator(s.T())
+	s.mockAlloc = allocator.NewMockAllocator(s.T())
 	s.mockCm = NewMockChannelManager(s.T())
-	s.mockSessMgr = NewMockSessionManager(s.T())
+	s.mockSessMgr = session.NewMockDataNodeManager(s.T())
 	s.cluster = NewMockCluster(s.T())
 	s.handler = newCompactionPlanHandler(s.cluster, s.mockSessMgr, s.mockCm, s.mockMeta, s.mockAlloc, nil, nil)
 }
@@ -759,6 +764,43 @@ func (s *CompactionPlanHandlerSuite) TestCheckCompaction() {
 	s.Equal(datapb.CompactionTaskState_executing, t.GetState())
 }
 
+func (s *CompactionPlanHandlerSuite) TestCompactionGC() {
+	s.SetupTest()
+	inTasks := []*datapb.CompactionTask{
+		{
+			PlanID:    1,
+			Type:      datapb.CompactionType_MixCompaction,
+			State:     datapb.CompactionTaskState_completed,
+			StartTime: time.Now().Add(-time.Second * 100000).Unix(),
+		},
+		{
+			PlanID:    2,
+			Type:      datapb.CompactionType_MixCompaction,
+			State:     datapb.CompactionTaskState_cleaned,
+			StartTime: time.Now().Add(-time.Second * 100000).Unix(),
+		},
+		{
+			PlanID:    3,
+			Type:      datapb.CompactionType_MixCompaction,
+			State:     datapb.CompactionTaskState_cleaned,
+			StartTime: time.Now().Unix(),
+		},
+	}
+
+	catalog := &datacoord.Catalog{MetaKv: NewMetaMemoryKV()}
+	compactionTaskMeta, err := newCompactionTaskMeta(context.TODO(), catalog)
+	s.NoError(err)
+	s.handler.meta = &meta{compactionTaskMeta: compactionTaskMeta}
+	for _, t := range inTasks {
+		s.handler.meta.SaveCompactionTask(t)
+	}
+
+	s.handler.cleanCompactionTaskMeta()
+	// two task should be cleaned, one remains
+	tasks := s.handler.meta.GetCompactionTaskMeta().GetCompactionTasks()
+	s.Equal(1, len(tasks))
+}
+
 func (s *CompactionPlanHandlerSuite) TestProcessCompleteCompaction() {
 	s.SetupTest()
 
@@ -899,4 +941,14 @@ func getStatsLogPath(rootPath string, segmentID typeutil.UniqueID) string {
 
 func getDeltaLogPath(rootPath string, segmentID typeutil.UniqueID) string {
 	return metautil.BuildDeltaLogPath(rootPath, 10, 100, segmentID, 10000)
+}
+
+func TestCheckDelay(t *testing.T) {
+	handler := &compactionPlanHandler{}
+	t1 := &mixCompactionTask{CompactionTask: &datapb.CompactionTask{StartTime: time.Now().Add(-100 * time.Minute).Unix()}}
+	handler.checkDelay(t1)
+	t2 := &l0CompactionTask{CompactionTask: &datapb.CompactionTask{StartTime: time.Now().Add(-100 * time.Minute).Unix()}}
+	handler.checkDelay(t2)
+	t3 := &clusteringCompactionTask{CompactionTask: &datapb.CompactionTask{StartTime: time.Now().Add(-100 * time.Minute).Unix()}}
+	handler.checkDelay(t3)
 }

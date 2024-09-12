@@ -26,18 +26,22 @@ import (
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
 	"github.com/milvus-io/milvus/internal/querycoordv2/session"
 	"github.com/milvus-io/milvus/internal/querycoordv2/task"
+	"github.com/milvus-io/milvus/pkg/util/paramtable"
 )
 
 type SegmentAssignPlan struct {
-	Segment *meta.Segment
-	Replica *meta.Replica
-	From    int64 // -1 if empty
-	To      int64
+	Segment      *meta.Segment
+	Replica      *meta.Replica
+	From         int64 // -1 if empty
+	To           int64
+	FromScore    int64
+	ToScore      int64
+	SegmentScore int64
 }
 
 func (segPlan *SegmentAssignPlan) ToString() string {
-	return fmt.Sprintf("SegmentPlan:[collectionID: %d, replicaID: %d, segmentID: %d, from: %d, to: %d]\n",
-		segPlan.Segment.CollectionID, segPlan.Replica.GetID(), segPlan.Segment.ID, segPlan.From, segPlan.To)
+	return fmt.Sprintf("SegmentPlan:[collectionID: %d, replicaID: %d, segmentID: %d, from: %d, to: %d, fromScore: %d, toScore: %d, segmentScore: %d]\n",
+		segPlan.Segment.CollectionID, segPlan.Replica.GetID(), segPlan.Segment.ID, segPlan.From, segPlan.To, segPlan.FromScore, segPlan.ToScore, segPlan.SegmentScore)
 }
 
 type ChannelAssignPlan struct {
@@ -82,6 +86,8 @@ func (b *RoundRobinBalancer) AssignSegment(collectionID int64, segments []*meta.
 		delta1, delta2 := b.scheduler.GetSegmentTaskDelta(id1, -1), b.scheduler.GetSegmentTaskDelta(id2, -1)
 		return cnt1+delta1 < cnt2+delta2
 	})
+
+	balanceBatchSize := paramtable.Get().QueryCoordCfg.CollectionBalanceSegmentBatchSize.GetAsInt()
 	ret := make([]SegmentAssignPlan, 0, len(segments))
 	for i, s := range segments {
 		plan := SegmentAssignPlan{
@@ -90,6 +96,9 @@ func (b *RoundRobinBalancer) AssignSegment(collectionID int64, segments []*meta.
 			To:      nodesInfo[i%len(nodesInfo)].ID(),
 		}
 		ret = append(ret, plan)
+		if len(ret) > balanceBatchSize {
+			break
+		}
 	}
 	return ret
 }

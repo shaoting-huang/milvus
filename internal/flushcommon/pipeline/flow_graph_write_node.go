@@ -4,16 +4,17 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/golang/protobuf/proto"
 	"github.com/samber/lo"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
-	"github.com/milvus-io/milvus/internal/datanode/util"
 	"github.com/milvus-io/milvus/internal/flushcommon/metacache"
+	"github.com/milvus-io/milvus/internal/flushcommon/util"
 	"github.com/milvus-io/milvus/internal/flushcommon/writebuffer"
+	"github.com/milvus-io/milvus/internal/util/streamingutil"
 	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/util/paramtable"
@@ -98,7 +99,9 @@ func (wNode *writeNode) Operate(in []Msg) []Msg {
 			}, true
 		})
 
-	wNode.updater.Update(wNode.channelName, end.GetTimestamp(), stats)
+	if !streamingutil.IsStreamingServiceEnabled() {
+		wNode.updater.Update(wNode.channelName, end.GetTimestamp(), stats)
+	}
 
 	res := FlowGraphMsg{
 		TimeRange:      fgMsg.TimeRange,

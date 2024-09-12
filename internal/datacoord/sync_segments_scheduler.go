@@ -23,6 +23,7 @@ import (
 	"github.com/samber/lo"
 	"go.uber.org/zap"
 
+	"github.com/milvus-io/milvus/internal/datacoord/session"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/util/logutil"
@@ -35,10 +36,10 @@ type SyncSegmentsScheduler struct {
 
 	meta           *meta
 	channelManager ChannelManager
-	sessions       SessionManager
+	sessions       session.DataNodeManager
 }
 
-func newSyncSegmentsScheduler(m *meta, channelManager ChannelManager, sessions SessionManager) *SyncSegmentsScheduler {
+func newSyncSegmentsScheduler(m *meta, channelManager ChannelManager, sessions session.DataNodeManager) *SyncSegmentsScheduler {
 	return &SyncSegmentsScheduler{
 		quit:           make(chan struct{}),
 		wg:             sync.WaitGroup{},
@@ -134,11 +135,15 @@ func (sss *SyncSegmentsScheduler) SyncSegments(collectionID, partitionID int64, 
 			Level:     seg.GetLevel(),
 			NumOfRows: seg.GetNumOfRows(),
 		}
+		statsLogs := make([]*datapb.Binlog, 0)
 		for _, statsLog := range seg.GetStatslogs() {
 			if statsLog.GetFieldID() == pkFieldID {
-				req.SegmentInfos[seg.ID].PkStatsLog = statsLog
-				break
+				statsLogs = append(statsLogs, statsLog.GetBinlogs()...)
 			}
+		}
+		req.SegmentInfos[seg.ID].PkStatsLog = &datapb.FieldBinlog{
+			FieldID: pkFieldID,
+			Binlogs: statsLogs,
 		}
 	}
 

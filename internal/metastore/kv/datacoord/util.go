@@ -19,8 +19,8 @@ package datacoord
 import (
 	"fmt"
 
-	"github.com/golang/protobuf/proto"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/internal/proto/datapb"
 	"github.com/milvus-io/milvus/internal/storage"
@@ -349,4 +349,8 @@ func buildPreImportTaskKey(taskID int64) string {
 
 func buildAnalyzeTaskKey(taskID int64) string {
 	return fmt.Sprintf("%s/%d", AnalyzeTaskPrefix, taskID)
+}
+
+func buildStatsTaskKey(taskID int64) string {
+	return fmt.Sprintf("%s/%d", StatsTaskPrefix, taskID)
 }

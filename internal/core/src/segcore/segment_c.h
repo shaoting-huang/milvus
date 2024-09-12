@@ -33,7 +33,8 @@ CStatus
 NewSegment(CCollection collection,
            SegmentType seg_type,
            int64_t segment_id,
-           CSegmentInterface* newSegment);
+           CSegmentInterface* newSegment,
+           bool is_sorted_by_pk);
 
 void
 DeleteSegment(CSegmentInterface c_segment);
@@ -103,13 +104,6 @@ LoadFieldData(CSegmentInterface c_segment,
               CLoadFieldDataInfo load_field_data_info);
 
 CStatus
-LoadFieldDataV2(CSegmentInterface c_segment,
-                CLoadFieldDataInfo load_field_data_info);
-
-CStatus
-RemoveDuplicatePkRecords(CSegmentInterface c_segment);
-
-CStatus
 LoadFieldRawData(CSegmentInterface c_segment,
                  int64_t field_id,
                  const void* data,
@@ -122,6 +116,11 @@ LoadDeletedRecord(CSegmentInterface c_segment,
 CStatus
 UpdateSealedSegmentIndex(CSegmentInterface c_segment,
                          CLoadIndexInfo c_load_index_info);
+
+CStatus
+LoadTextIndex(CSegmentInterface c_segment,
+              const uint8_t* serialized_load_text_index_info,
+              const uint64_t len);
 
 CStatus
 UpdateFieldRawDataSize(CSegmentInterface c_segment,
@@ -140,7 +139,9 @@ AddFieldDataInfoForSealed(CSegmentInterface c_segment,
                           CLoadFieldDataInfo c_load_field_data_info);
 
 CStatus
-WarmupChunkCache(CSegmentInterface c_segment, int64_t field_id);
+WarmupChunkCache(CSegmentInterface c_segment,
+                 int64_t field_id,
+                 bool mmap_enabled);
 
 //////////////////////////////    interfaces for SegmentInterface    //////////////////////////////
 CStatus
@@ -159,6 +160,9 @@ Delete(CSegmentInterface c_segment,
 
 void
 RemoveFieldFile(CSegmentInterface c_segment, int64_t field_id);
+
+CStatus
+CreateTextIndex(CSegmentInterface c_segment, int64_t field_id);
 
 #ifdef __cplusplus
 }

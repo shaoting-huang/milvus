@@ -119,17 +119,12 @@ func (b *BalanceChecker) replicasToBalance() []int64 {
 		return nil
 	}
 
-	// scheduler is handling segment task, skip
-	if b.scheduler.GetSegmentTaskNum() != 0 {
-		return nil
-	}
-
 	// iterator one normal collection in one round
 	normalReplicasToBalance := make([]int64, 0)
 	hasUnbalancedCollection := false
 	for _, cid := range loadedCollections {
 		if b.normalBalanceCollectionsCurrentRound.Contain(cid) {
-			log.Debug("ScoreBasedBalancer is balancing this collection, skip balancing in this round",
+			log.RatedDebug(10, "ScoreBasedBalancer is balancing this collection, skip balancing in this round",
 				zap.Int64("collectionID", cid))
 			continue
 		}
@@ -171,6 +166,11 @@ func (b *BalanceChecker) Check(ctx context.Context) []task.Task {
 
 	replicasToBalance := b.replicasToBalance()
 	segmentPlans, channelPlans := b.balanceReplicas(replicasToBalance)
+	// iterate all collection to find a collection to balance
+	for len(segmentPlans) == 0 && len(channelPlans) == 0 && b.normalBalanceCollectionsCurrentRound.Len() > 0 {
+		replicasToBalance := b.replicasToBalance()
+		segmentPlans, channelPlans = b.balanceReplicas(replicasToBalance)
+	}
 
 	tasks := balance.CreateSegmentTasksFromPlans(ctx, b.ID(), Params.QueryCoordCfg.SegmentTaskTimeout.GetAsDuration(time.Millisecond), segmentPlans)
 	task.SetPriority(task.TaskPriorityLow, tasks...)

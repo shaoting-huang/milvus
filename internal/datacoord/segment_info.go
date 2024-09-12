@@ -19,10 +19,10 @@ package datacoord
 import (
 	"time"
 
-	"github.com/golang/protobuf/proto"
 	"github.com/samber/lo"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
@@ -473,8 +473,9 @@ func SetLevel(level datapb.SegmentLevel) SegmentInfoOption {
 	}
 }
 
+// getSegmentSize use cached value when segment is immutable
 func (s *SegmentInfo) getSegmentSize() int64 {
-	if s.size.Load() <= 0 || s.GetState() == commonpb.SegmentState_Growing {
+	if s.size.Load() <= 0 || s.GetState() != commonpb.SegmentState_Flushed {
 		var size int64
 		for _, binlogs := range s.GetBinlogs() {
 			for _, l := range binlogs.GetBinlogs() {
@@ -500,8 +501,9 @@ func (s *SegmentInfo) getSegmentSize() int64 {
 	return s.size.Load()
 }
 
+// getDeltaCount use cached value when segment is immutable
 func (s *SegmentInfo) getDeltaCount() int64 {
-	if s.deltaRowcount.Load() < 0 {
+	if s.deltaRowcount.Load() < 0 || s.State != commonpb.SegmentState_Flushed {
 		var rc int64
 		for _, deltaLogs := range s.GetDeltalogs() {
 			for _, l := range deltaLogs.GetBinlogs() {

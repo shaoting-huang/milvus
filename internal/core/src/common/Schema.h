@@ -113,6 +113,20 @@ class Schema {
         this->AddField(std::move(field_meta));
     }
 
+    // string type
+    void
+    AddField(const FieldName& name,
+             const FieldId id,
+             DataType data_type,
+             int64_t max_length,
+             bool nullable,
+             bool enable_match,
+             std::map<std::string, std::string>& params) {
+        auto field_meta = FieldMeta(
+            name, id, data_type, max_length, nullable, enable_match, params);
+        this->AddField(std::move(field_meta));
+    }
+
     // vector type
     void
     AddField(const FieldName& name,
@@ -129,6 +143,11 @@ class Schema {
     void
     set_primary_field_id(FieldId field_id) {
         this->primary_field_id_opt_ = field_id;
+    }
+
+    void
+    set_dynamic_field_id(FieldId field_id) {
+        this->dynamic_field_id_opt_ = field_id;
     }
 
     auto
@@ -184,6 +203,11 @@ class Schema {
         return primary_field_id_opt_;
     }
 
+    std::optional<FieldId>
+    get_dynamic_field_id() const {
+        return dynamic_field_id_opt_;
+    }
+
  public:
     static std::shared_ptr<Schema>
     ParseFrom(const milvus::proto::schema::CollectionSchema& schema_proto);
@@ -213,6 +237,7 @@ class Schema {
     std::unordered_map<FieldId, FieldName> id_names_;  // field_id -> field_name
 
     std::optional<FieldId> primary_field_id_opt_;
+    std::optional<FieldId> dynamic_field_id_opt_;
 };
 
 using SchemaPtr = std::shared_ptr<Schema>;

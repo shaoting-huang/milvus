@@ -9,9 +9,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
-	clientv2 "github.com/milvus-io/milvus/client/v2"
+	"github.com/milvus-io/milvus/client/v2"
 	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/entity"
+	"github.com/milvus-io/milvus/client/v2/index"
 	"github.com/milvus-io/milvus/pkg/log"
 )
 
@@ -123,7 +124,7 @@ func EqualArrayColumn(t *testing.T, columnA column.Column, columnB column.Column
 }
 
 // CheckInsertResult check insert result, ids len (insert count), ids data (pks, but no auto ids)
-func CheckInsertResult(t *testing.T, expIds column.Column, insertRes clientv2.InsertResult) {
+func CheckInsertResult(t *testing.T, expIds column.Column, insertRes client.InsertResult) {
 	require.Equal(t, expIds.Len(), insertRes.IDs.Len())
 	require.Equal(t, expIds.Len(), int(insertRes.InsertCount))
 	actualIds := insertRes.IDs
@@ -149,13 +150,13 @@ func CheckOutputFields(t *testing.T, expFields []string, actualColumns []column.
 }
 
 // CheckSearchResult check search result, check nq, topk, ids, score
-func CheckSearchResult(t *testing.T, actualSearchResults []clientv2.ResultSet, expNq int, expTopK int) {
-	require.Equal(t, len(actualSearchResults), expNq)
+func CheckSearchResult(t *testing.T, actualSearchResults []client.ResultSet, expNq int, expTopK int) {
+	require.Equalf(t, len(actualSearchResults), expNq, fmt.Sprintf("Expected nq=%d, actual SearchResultsLen=%d", expNq, len(actualSearchResults)))
 	require.Len(t, actualSearchResults, expNq)
 	for _, actualSearchResult := range actualSearchResults {
-		require.Equal(t, actualSearchResult.ResultCount, expTopK)
-		require.Equal(t, actualSearchResult.IDs.Len(), expTopK)
-		require.Equal(t, len(actualSearchResult.Scores), expTopK)
+		require.Equalf(t, actualSearchResult.ResultCount, expTopK, fmt.Sprintf("Expected topK=%d, actual ResultCount=%d", expTopK, actualSearchResult.ResultCount))
+		require.Equalf(t, actualSearchResult.IDs.Len(), expTopK, fmt.Sprintf("Expected topK=%d, actual IDsLen=%d", expTopK, actualSearchResult.IDs.Len()))
+		require.Equalf(t, len(actualSearchResult.Scores), expTopK, fmt.Sprintf("Expected topK=%d, actual ScoresLen=%d", expTopK, len(actualSearchResult.Scores)))
 	}
 }
 
@@ -174,5 +175,46 @@ func CheckQueryResult(t *testing.T, expColumns []column.Column, actualColumns []
 		if !exist {
 			log.Error("CheckQueryResult actualColumns no column", zap.String("name", expColumn.Name()))
 		}
+	}
+}
+
+// GenColumnDataOption -- create column data --
+type checkIndexOpt struct {
+	state            index.IndexState
+	pendingIndexRows int64
+	totalRows        int64
+	indexedRows      int64
+}
+
+func TNewCheckIndexOpt(totalRows int64) *checkIndexOpt {
+	return &checkIndexOpt{
+		state:            IndexStateFinished,
+		totalRows:        totalRows,
+		pendingIndexRows: 0,
+		indexedRows:      totalRows,
+	}
+}
+
+func (opt *checkIndexOpt) TWithIndexState(state index.IndexState) *checkIndexOpt {
+	opt.state = state
+	return opt
+}
+
+func (opt *checkIndexOpt) TWithIndexRows(totalRows int64, indexedRows int64, pendingIndexRows int64) *checkIndexOpt {
+	opt.totalRows = totalRows
+	opt.indexedRows = indexedRows
+	opt.pendingIndexRows = pendingIndexRows
+	return opt
+}
+
+func CheckIndex(t *testing.T, actualIdxDesc client.IndexDescription, idx index.Index, opt *checkIndexOpt) {
+	require.EqualValuesf(t, idx, actualIdxDesc.Index, "Actual index is not same with expected index")
+	require.Equal(t, actualIdxDesc.TotalRows, actualIdxDesc.PendingIndexRows+actualIdxDesc.IndexedRows)
+	if opt != nil {
+		require.Equal(t, opt.totalRows, opt.pendingIndexRows+opt.indexedRows)
+		require.Equal(t, opt.state, actualIdxDesc.State)
+		require.Equal(t, opt.totalRows, actualIdxDesc.TotalRows)
+		require.Equal(t, opt.indexedRows, actualIdxDesc.IndexedRows)
+		require.Equal(t, opt.pendingIndexRows, actualIdxDesc.PendingIndexRows)
 	}
 }

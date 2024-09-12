@@ -191,10 +191,6 @@ func (m mockMetaTable) GetCollectionVirtualChannels(colID int64) []string {
 	return m.GetCollectionVirtualChannelsFunc(colID)
 }
 
-func (m mockMetaTable) GetVChannelsByPchannel(pchannel string) []string {
-	panic("unimplemented")
-}
-
 func (m mockMetaTable) AddCredential(credInfo *internalpb.CredentialInfo) error {
 	return m.AddCredentialFunc(credInfo)
 }
@@ -943,24 +939,6 @@ func withBroker(b Broker) Opt {
 	return func(c *Core) {
 		c.broker = b
 	}
-}
-
-type mockGarbageCollector struct {
-	GarbageCollector
-	GcCollectionDataFunc func(ctx context.Context, coll *model.Collection) (Timestamp, error)
-	GcPartitionDataFunc  func(ctx context.Context, pChannels []string, partition *model.Partition) (Timestamp, error)
-}
-
-func (m mockGarbageCollector) GcCollectionData(ctx context.Context, coll *model.Collection) (Timestamp, error) {
-	return m.GcCollectionDataFunc(ctx, coll)
-}
-
-func (m mockGarbageCollector) GcPartitionData(ctx context.Context, pChannels []string, partition *model.Partition) (Timestamp, error) {
-	return m.GcPartitionDataFunc(ctx, pChannels, partition)
-}
-
-func newMockGarbageCollector() *mockGarbageCollector {
-	return &mockGarbageCollector{}
 }
 
 func withGarbageCollector(gc GarbageCollector) Opt {

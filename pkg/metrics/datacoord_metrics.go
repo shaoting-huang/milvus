@@ -138,6 +138,7 @@ var (
 			databaseLabelName,
 			collectionIDLabelName,
 			segmentIDLabelName,
+			segmentStateLabelName,
 		})
 	DataCoordSegmentBinLogFileCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -308,6 +309,27 @@ var (
 			Name:      "import_tasks",
 			Help:      "the import tasks grouping by type and state",
 		}, []string{"task_type", "import_state"})
+
+	DataCoordTaskExecuteLatency = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: milvusNamespace,
+			Subsystem: typeutil.DataCoordRole,
+			Name:      "task_execute_max_latency",
+			Help:      "latency of task execute operation",
+			Buckets:   longTaskBuckets,
+		}, []string{
+			taskTypeLabel,
+			statusLabelName,
+		})
+
+	// TaskNum records the number of tasks of each type.
+	TaskNum = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: milvusNamespace,
+			Subsystem: typeutil.DataCoordRole,
+			Name:      "task_count",
+			Help:      "number of index tasks of each type",
+		}, []string{collectionIDLabelName, taskTypeLabel, taskStateLabel})
 )
 
 // RegisterDataCoord registers DataCoord metrics
@@ -335,6 +357,8 @@ func RegisterDataCoord(registry *prometheus.Registry) {
 	registry.MustRegister(ImportTasks)
 	registry.MustRegister(GarbageCollectorFileScanDuration)
 	registry.MustRegister(GarbageCollectorRunCount)
+	registry.MustRegister(DataCoordTaskExecuteLatency)
+	registry.MustRegister(TaskNum)
 }
 
 func CleanupDataCoordSegmentMetrics(dbName string, collectionID int64, segmentID int64) {

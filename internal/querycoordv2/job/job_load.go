@@ -35,6 +35,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/eventlog"
 	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/metrics"
+	"github.com/milvus-io/milvus/pkg/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/util/merr"
 	"github.com/milvus-io/milvus/pkg/util/typeutil"
 )
@@ -48,7 +49,7 @@ type LoadCollectionJob struct {
 	meta               *meta.Meta
 	broker             meta.Broker
 	cluster            session.Cluster
-	targetMgr          *meta.TargetManager
+	targetMgr          meta.TargetManagerInterface
 	targetObserver     *observers.TargetObserver
 	collectionObserver *observers.CollectionObserver
 	nodeMgr            *session.NodeManager
@@ -61,7 +62,7 @@ func NewLoadCollectionJob(
 	meta *meta.Meta,
 	broker meta.Broker,
 	cluster session.Cluster,
-	targetMgr *meta.TargetManager,
+	targetMgr meta.TargetManagerInterface,
 	targetObserver *observers.TargetObserver,
 	collectionObserver *observers.CollectionObserver,
 	nodeMgr *session.NodeManager,
@@ -102,11 +103,14 @@ func (job *LoadCollectionJob) PreExecute() error {
 		)
 		log.Warn(msg)
 		return merr.WrapErrParameterInvalid(collection.GetReplicaNumber(), req.GetReplicaNumber(), "can't change the replica number for loaded collection")
-	} else if !typeutil.MapEqual(collection.GetFieldIndexID(), req.GetFieldIndexID()) {
-		msg := fmt.Sprintf("collection with different index %v existed, release this collection first before changing its index",
-			collection.GetFieldIndexID())
-		log.Warn(msg)
-		return merr.WrapErrParameterInvalid(collection.GetFieldIndexID(), req.GetFieldIndexID(), "can't change the index for loaded collection")
+	}
+
+	if !funcutil.SliceSetEqual(collection.GetLoadFields(), req.GetLoadFields()) {
+		log.Warn("collection with different load field list exists, release this collection first before chaning its replica number",
+			zap.Int64s("loadedFieldIDs", collection.GetLoadFields()),
+			zap.Int64s("reqFieldIDs", req.GetLoadFields()),
+		)
+		return merr.WrapErrParameterInvalid(collection.GetLoadFields(), req.GetLoadFields(), "can't change the load field list for loaded collection")
 	}
 
 	return nil
@@ -196,6 +200,7 @@ func (job *LoadCollectionJob) Execute() error {
 			Status:        querypb.LoadStatus_Loading,
 			FieldIndexID:  req.GetFieldIndexID(),
 			LoadType:      querypb.LoadType_LoadCollection,
+			LoadFields:    req.GetLoadFields(),
 		},
 		CreatedAt: time.Now(),
 		LoadSpan:  sp,
@@ -239,7 +244,7 @@ type LoadPartitionJob struct {
 	meta               *meta.Meta
 	broker             meta.Broker
 	cluster            session.Cluster
-	targetMgr          *meta.TargetManager
+	targetMgr          meta.TargetManagerInterface
 	targetObserver     *observers.TargetObserver
 	collectionObserver *observers.CollectionObserver
 	nodeMgr            *session.NodeManager
@@ -252,7 +257,7 @@ func NewLoadPartitionJob(
 	meta *meta.Meta,
 	broker meta.Broker,
 	cluster session.Cluster,
-	targetMgr *meta.TargetManager,
+	targetMgr meta.TargetManagerInterface,
 	targetObserver *observers.TargetObserver,
 	collectionObserver *observers.CollectionObserver,
 	nodeMgr *session.NodeManager,
@@ -291,11 +296,14 @@ func (job *LoadPartitionJob) PreExecute() error {
 		msg := "collection with different replica number existed, release this collection first before changing its replica number"
 		log.Warn(msg)
 		return merr.WrapErrParameterInvalid(collection.GetReplicaNumber(), req.GetReplicaNumber(), "can't change the replica number for loaded partitions")
-	} else if !typeutil.MapEqual(collection.GetFieldIndexID(), req.GetFieldIndexID()) {
-		msg := fmt.Sprintf("collection with different index %v existed, release this collection first before changing its index",
-			job.meta.GetFieldIndex(req.GetCollectionID()))
-		log.Warn(msg)
-		return merr.WrapErrParameterInvalid(collection.GetFieldIndexID(), req.GetFieldIndexID(), "can't change the index for loaded partitions")
+	}
+
+	if !funcutil.SliceSetEqual(collection.GetLoadFields(), req.GetLoadFields()) {
+		log.Warn("collection with different load field list exists, release this collection first before chaning its replica number",
+			zap.Int64s("loadedFieldIDs", collection.GetLoadFields()),
+			zap.Int64s("reqFieldIDs", req.GetLoadFields()),
+		)
+		return merr.WrapErrParameterInvalid(collection.GetLoadFields(), req.GetLoadFields(), "can't change the load field list for loaded collection")
 	}
 
 	return nil
@@ -381,6 +389,7 @@ func (job *LoadPartitionJob) Execute() error {
 				Status:        querypb.LoadStatus_Loading,
 				FieldIndexID:  req.GetFieldIndexID(),
 				LoadType:      querypb.LoadType_LoadPartition,
+				LoadFields:    req.GetLoadFields(),
 			},
 			CreatedAt: time.Now(),
 			LoadSpan:  sp,

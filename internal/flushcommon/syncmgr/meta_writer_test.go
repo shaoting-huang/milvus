@@ -8,8 +8,9 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/milvus-io/milvus/internal/datanode/broker"
+	"github.com/milvus-io/milvus/internal/flushcommon/broker"
 	"github.com/milvus-io/milvus/internal/flushcommon/metacache"
+	"github.com/milvus-io/milvus/internal/flushcommon/metacache/pkoracle"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/util/retry"
@@ -39,7 +40,7 @@ func (s *MetaWriterSuite) TestNormalSave() {
 	defer cancel()
 	s.broker.EXPECT().SaveBinlogPaths(mock.Anything, mock.Anything).Return(nil)
 
-	bfs := metacache.NewBloomFilterSet()
+	bfs := pkoracle.NewBloomFilterSet()
 	seg := metacache.NewSegmentInfo(&datapb.SegmentInfo{}, bfs)
 	metacache.UpdateNumOfRows(1000)(seg)
 	s.metacache.EXPECT().GetSegmentsBy(mock.Anything, mock.Anything).Return([]*metacache.SegmentInfo{seg})
@@ -56,7 +57,7 @@ func (s *MetaWriterSuite) TestReturnError() {
 	defer cancel()
 	s.broker.EXPECT().SaveBinlogPaths(mock.Anything, mock.Anything).Return(errors.New("mocked"))
 
-	bfs := metacache.NewBloomFilterSet()
+	bfs := pkoracle.NewBloomFilterSet()
 	seg := metacache.NewSegmentInfo(&datapb.SegmentInfo{}, bfs)
 	metacache.UpdateNumOfRows(1000)(seg)
 	s.metacache.EXPECT().GetSegmentByID(mock.Anything).Return(seg, true)
@@ -64,34 +65,6 @@ func (s *MetaWriterSuite) TestReturnError() {
 	task := NewSyncTask()
 	task.WithMetaCache(s.metacache)
 	err := s.writer.UpdateSync(ctx, task)
-	s.Error(err)
-}
-
-func (s *MetaWriterSuite) TestNormalSaveV2() {
-	s.broker.EXPECT().SaveBinlogPaths(mock.Anything, mock.Anything).Return(nil)
-
-	bfs := metacache.NewBloomFilterSet()
-	seg := metacache.NewSegmentInfo(&datapb.SegmentInfo{}, bfs)
-	metacache.UpdateNumOfRows(1000)(seg)
-	s.metacache.EXPECT().GetSegmentByID(mock.Anything).Return(seg, true)
-	s.metacache.EXPECT().GetSegmentsBy(mock.Anything, mock.Anything).Return([]*metacache.SegmentInfo{seg})
-	task := NewSyncTaskV2()
-	task.WithMetaCache(s.metacache)
-	err := s.writer.UpdateSyncV2(task)
-	s.NoError(err)
-}
-
-func (s *MetaWriterSuite) TestReturnErrorV2() {
-	s.broker.EXPECT().SaveBinlogPaths(mock.Anything, mock.Anything).Return(errors.New("mocked"))
-
-	bfs := metacache.NewBloomFilterSet()
-	seg := metacache.NewSegmentInfo(&datapb.SegmentInfo{}, bfs)
-	metacache.UpdateNumOfRows(1000)(seg)
-	s.metacache.EXPECT().GetSegmentByID(mock.Anything).Return(seg, true)
-	s.metacache.EXPECT().GetSegmentsBy(mock.Anything, mock.Anything).Return([]*metacache.SegmentInfo{seg})
-	task := NewSyncTaskV2()
-	task.WithMetaCache(s.metacache)
-	err := s.writer.UpdateSyncV2(task)
 	s.Error(err)
 }
 

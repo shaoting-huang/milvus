@@ -1,11 +1,12 @@
 package message
 
-import "github.com/golang/protobuf/proto"
+import "google.golang.org/protobuf/proto"
 
 var (
-	_ BasicMessage     = (*messageImpl)(nil)
-	_ MutableMessage   = (*messageImpl)(nil)
-	_ ImmutableMessage = (*immutableMessageImpl)(nil)
+	_ BasicMessage        = (*messageImpl)(nil)
+	_ MutableMessage      = (*messageImpl)(nil)
+	_ ImmutableMessage    = (*immutableMessageImpl)(nil)
+	_ ImmutableTxnMessage = (*immutableTxnMessageImpl)(nil)
 )
 
 // BasicMessage is the basic interface of message.
@@ -27,6 +28,23 @@ type BasicMessage interface {
 	// Properties returns the message properties.
 	// Should be used with read-only promise.
 	Properties() RProperties
+
+	// VChannel returns the virtual channel of current message.
+	// Available only when the message's version greater than 0.
+	// Return "" if message is broadcasted.
+	VChannel() string
+
+	// TimeTick returns the time tick of current message.
+	// Available only when the message's version greater than 0.
+	// Otherwise, it will panic.
+	TimeTick() uint64
+
+	// BarrierTimeTick returns the barrier time tick of current message.
+	// 0 by default, no fence.
+	BarrierTimeTick() uint64
+
+	// TxnContext returns the transaction context of current message.
+	TxnContext() *TxnContext
 }
 
 // MutableMessage is the mutable message interface.
@@ -34,17 +52,31 @@ type BasicMessage interface {
 type MutableMessage interface {
 	BasicMessage
 
+	// WithBarrierTimeTick sets the barrier time tick of current message.
+	// these time tick is used to promised the message will be sent after that time tick.
+	// and the message which timetick is less than it will never concurrent append with it.
+	// !!! preserved for streaming system internal usage, don't call it outside of streaming system.
+	WithBarrierTimeTick(tt uint64) MutableMessage
+
+	// WithWALTerm sets the wal term of current message.
+	// !!! preserved for streaming system internal usage, don't call it outside of streaming system.
+	WithWALTerm(term int64) MutableMessage
+
 	// WithLastConfirmed sets the last confirmed message id of current message.
-	// !!! preserved for streaming system internal usage, don't call it outside of log system.
+	// !!! preserved for streaming system internal usage, don't call it outside of streaming system.
 	WithLastConfirmed(id MessageID) MutableMessage
 
+	// WithLastConfirmedUseMessageID sets the last confirmed message id of current message to be the same as message id.
+	// !!! preserved for streaming system internal usage, don't call it outside of streaming system.
+	WithLastConfirmedUseMessageID() MutableMessage
+
 	// WithTimeTick sets the time tick of current message.
-	// !!! preserved for streaming system internal usage, don't call it outside of log system.
+	// !!! preserved for streaming system internal usage, don't call it outside of streaming system.
 	WithTimeTick(tt uint64) MutableMessage
 
-	// WithVChannel sets the virtual channel of current message.
-	// !!! preserved for streaming system internal usage, don't call it outside of log system.
-	WithVChannel(vChannel string) MutableMessage
+	// WithTxnContext sets the transaction context of current message.
+	// !!! preserved for streaming system internal usage, don't call it outside of streaming system.
+	WithTxnContext(txnCtx TxnContext) MutableMessage
 
 	// IntoImmutableMessage converts the mutable message to immutable message.
 	IntoImmutableMessage(msgID MessageID) ImmutableMessage
@@ -58,15 +90,8 @@ type ImmutableMessage interface {
 	// WALName returns the name of message related wal.
 	WALName() string
 
-	// VChannel returns the virtual channel of current message.
-	// Available only when the message's version greater than 0.
-	// Otherwise, it will panic.
-	VChannel() string
-
-	// TimeTick returns the time tick of current message.
-	// Available only when the message's version greater than 0.
-	// Otherwise, it will panic.
-	TimeTick() uint64
+	// MessageID returns the message id of current message.
+	MessageID() MessageID
 
 	// LastConfirmedMessageID returns the last confirmed message id of current message.
 	// last confirmed message is always a timetick message.
@@ -74,34 +99,53 @@ type ImmutableMessage interface {
 	// Available only when the message's version greater than 0.
 	// Otherwise, it will panic.
 	LastConfirmedMessageID() MessageID
+}
 
-	// MessageID returns the message id of current message.
-	MessageID() MessageID
+// ImmutableTxnMessage is the read-only transaction message interface.
+// Once a transaction is committed, the wal will generate a transaction message.
+// The MessageType() is always return MessageTypeTransaction if it's a transaction message.
+type ImmutableTxnMessage interface {
+	ImmutableMessage
+
+	// Begin returns the begin message of the transaction.
+	Begin() ImmutableMessage
+
+	// Commit returns the commit message of the transaction.
+	Commit() ImmutableMessage
+
+	// RangeOver iterates over the underlying messages in the transaction.
+	// If visitor return not nil, the iteration will be stopped.
+	RangeOver(visitor func(ImmutableMessage) error) error
+
+	// Size returns the number of messages in the transaction.
+	Size() int
 }
 
 // specializedMutableMessage is the specialized mutable message interface.
-type specializedMutableMessage[H proto.Message] interface {
+type specializedMutableMessage[H proto.Message, B proto.Message] interface {
 	BasicMessage
-
-	// VChannel returns the vchannel of the message.
-	VChannel() string
-
-	// TimeTick returns the time tick of the message.
-	TimeTick() uint64
 
 	// MessageHeader returns the message header.
 	// Modifications to the returned header will be reflected in the message.
-	MessageHeader() H
+	Header() H
 
-	// OverwriteMessageHeader overwrites the message header.
-	OverwriteMessageHeader(header H)
+	// Body returns the message body.
+	// !!! Do these will trigger a unmarshal operation, so it should be used with caution.
+	Body() (B, error)
+
+	// OverwriteHeader overwrites the message header.
+	OverwriteHeader(header H)
 }
 
 // specializedImmutableMessage is the specialized immutable message interface.
-type specializedImmutableMessage[H proto.Message] interface {
+type specializedImmutableMessage[H proto.Message, B proto.Message] interface {
 	ImmutableMessage
 
-	// MessageHeader returns the message header.
+	// Header returns the message header.
 	// Modifications to the returned header will be reflected in the message.
-	MessageHeader() H
+	Header() H
+
+	// Body returns the message body.
+	// !!! Do these will trigger a unmarshal operation, so it should be used with caution.
+	Body() (B, error)
 }

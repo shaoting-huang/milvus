@@ -31,6 +31,8 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
+	"github.com/milvus-io/milvus/internal/datacoord/allocator"
+	"github.com/milvus-io/milvus/internal/datacoord/session"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/metrics"
@@ -40,6 +42,12 @@ import (
 	"github.com/milvus-io/milvus/pkg/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/util/typeutil"
 )
+
+var maxCompactionTaskExecutionDuration = map[datapb.CompactionType]time.Duration{
+	datapb.CompactionType_MixCompaction:          30 * time.Minute,
+	datapb.CompactionType_Level0DeleteCompaction: 30 * time.Minute,
+	datapb.CompactionType_ClusteringCompaction:   60 * time.Minute,
+}
 
 type compactionPlanContext interface {
 	start()
@@ -79,9 +87,9 @@ type compactionPlanHandler struct {
 	executingTasks map[int64]CompactionTask // planID -> task
 
 	meta             CompactionMeta
-	allocator        allocator
+	allocator        allocator.Allocator
 	chManager        ChannelManager
-	sessions         SessionManager
+	sessions         session.DataNodeManager
 	cluster          Cluster
 	analyzeScheduler *taskScheduler
 	handler          Handler
@@ -100,7 +108,7 @@ func (c *compactionPlanHandler) getCompactionInfo(triggerID int64) *compactionIn
 
 func summaryCompactionState(tasks []*datapb.CompactionTask) *compactionInfo {
 	ret := &compactionInfo{}
-	var executingCnt, pipeliningCnt, completedCnt, failedCnt, timeoutCnt, analyzingCnt, indexingCnt, cleanedCnt, metaSavedCnt int
+	var executingCnt, pipeliningCnt, completedCnt, failedCnt, timeoutCnt, analyzingCnt, indexingCnt, cleanedCnt, metaSavedCnt, stats int
 	mergeInfos := make(map[int64]*milvuspb.CompactionMergeInfo)
 
 	for _, task := range tasks {
@@ -126,12 +134,14 @@ func summaryCompactionState(tasks []*datapb.CompactionTask) *compactionInfo {
 			cleanedCnt++
 		case datapb.CompactionTaskState_meta_saved:
 			metaSavedCnt++
+		case datapb.CompactionTaskState_statistic:
+			stats++
 		default:
 		}
 		mergeInfos[task.GetPlanID()] = getCompactionMergeInfo(task)
 	}
 
-	ret.executingCnt = executingCnt + pipeliningCnt + analyzingCnt + indexingCnt + metaSavedCnt
+	ret.executingCnt = executingCnt + pipeliningCnt + analyzingCnt + indexingCnt + metaSavedCnt + stats
 	ret.completedCnt = completedCnt
 	ret.timeoutCnt = timeoutCnt
 	ret.failedCnt = failedCnt
@@ -176,7 +186,7 @@ func (c *compactionPlanHandler) getCompactionTasksNumBySignalID(triggerID int64)
 	return cnt
 }
 
-func newCompactionPlanHandler(cluster Cluster, sessions SessionManager, cm ChannelManager, meta CompactionMeta, allocator allocator, analyzeScheduler *taskScheduler, handler Handler,
+func newCompactionPlanHandler(cluster Cluster, sessions session.DataNodeManager, cm ChannelManager, meta CompactionMeta, allocator allocator.Allocator, analyzeScheduler *taskScheduler, handler Handler,
 ) *compactionPlanHandler {
 	return &compactionPlanHandler{
 		queueTasks:       make(map[int64]CompactionTask),
@@ -359,6 +369,7 @@ func (c *compactionPlanHandler) loopCheck() {
 	log.Info("compactionPlanHandler start loop check", zap.Any("check result interval", interval))
 	defer c.stopWg.Done()
 	checkResultTicker := time.NewTicker(interval)
+	defer checkResultTicker.Stop()
 	for {
 		select {
 		case <-c.stopCh:
@@ -375,8 +386,10 @@ func (c *compactionPlanHandler) loopCheck() {
 }
 
 func (c *compactionPlanHandler) loopClean() {
+	interval := Params.DataCoordCfg.CompactionGCIntervalInSeconds.GetAsDuration(time.Second)
+	log.Info("compactionPlanHandler start clean check loop", zap.Any("gc interval", interval))
 	defer c.stopWg.Done()
-	cleanTicker := time.NewTicker(30 * time.Minute)
+	cleanTicker := time.NewTicker(interval)
 	defer cleanTicker.Stop()
 	for {
 		select {
@@ -401,9 +414,10 @@ func (c *compactionPlanHandler) cleanCompactionTaskMeta() {
 		for _, task := range tasks {
 			if task.State == datapb.CompactionTaskState_completed || task.State == datapb.CompactionTaskState_cleaned {
 				duration := time.Since(time.Unix(task.StartTime, 0)).Seconds()
-				if duration > float64(Params.DataCoordCfg.CompactionDropToleranceInSeconds.GetAsDuration(time.Second)) {
+				if duration > float64(Params.DataCoordCfg.CompactionDropToleranceInSeconds.GetAsDuration(time.Second).Seconds()) {
 					// try best to delete meta
 					err := c.meta.DropCompactionTask(task)
+					log.Debug("drop compaction task meta", zap.Int64("planID", task.PlanID))
 					if err != nil {
 						log.Warn("fail to drop task", zap.Int64("planID", task.PlanID), zap.Error(err))
 					}
@@ -589,14 +603,7 @@ func (c *compactionPlanHandler) createCompactTask(t *datapb.CompactionTask) (Com
 			sessions:       c.sessions,
 		}
 	case datapb.CompactionType_ClusteringCompaction:
-		task = &clusteringCompactionTask{
-			CompactionTask:   t,
-			allocator:        c.allocator,
-			meta:             c.meta,
-			sessions:         c.sessions,
-			handler:          c.handler,
-			analyzeScheduler: c.analyzeScheduler,
-		}
+		task = newClusteringCompactionTask(t, c.allocator, c.meta, c.sessions, c.handler, c.analyzeScheduler)
 	default:
 		return nil, merr.WrapErrIllegalCompactionPlan("illegal compaction type")
 	}
@@ -657,6 +664,7 @@ func (c *compactionPlanHandler) checkCompaction() error {
 	var finishedTasks []CompactionTask
 	c.executingGuard.RLock()
 	for _, t := range c.executingTasks {
+		c.checkDelay(t)
 		finished := t.Process()
 		if finished {
 			finishedTasks = append(finishedTasks, t)
@@ -731,6 +739,23 @@ func (c *compactionPlanHandler) getTasksByState(state datapb.CompactionTaskState
 		}
 	}
 	return tasks
+}
+
+func (c *compactionPlanHandler) checkDelay(t CompactionTask) {
+	log := log.Ctx(context.TODO()).WithRateGroup("compactionPlanHandler.checkDelay", 1.0, 60.0)
+	maxExecDuration := maxCompactionTaskExecutionDuration[t.GetType()]
+	startTime := time.Unix(t.GetStartTime(), 0)
+	execDuration := time.Since(startTime)
+	if execDuration >= maxExecDuration {
+		log.RatedWarn(60, "compaction task is delay",
+			zap.Int64("planID", t.GetPlanID()),
+			zap.String("type", t.GetType().String()),
+			zap.String("state", t.GetState().String()),
+			zap.String("vchannel", t.GetChannel()),
+			zap.Int64("nodeID", t.GetNodeID()),
+			zap.Time("startTime", startTime),
+			zap.Duration("execDuration", execDuration))
+	}
 }
 
 var (

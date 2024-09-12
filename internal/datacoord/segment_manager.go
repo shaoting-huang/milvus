@@ -30,6 +30,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
+	"github.com/milvus-io/milvus/internal/datacoord/allocator"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/util/lock"
@@ -74,9 +75,13 @@ func putAllocation(a *Allocation) {
 type Manager interface {
 	// CreateSegment create new segment when segment not exist
 
-	// AllocSegment allocates rows and record the allocation.
+	// Deprecated: AllocSegment allocates rows and record the allocation, will be deprecated after enabling streamingnode.
 	AllocSegment(ctx context.Context, collectionID, partitionID UniqueID, channelName string, requestRows int64) ([]*Allocation, error)
 	AllocImportSegment(ctx context.Context, taskID int64, collectionID UniqueID, partitionID UniqueID, channelName string, level datapb.SegmentLevel) (*SegmentInfo, error)
+
+	// AllocNewGrowingSegment allocates segment for streaming node.
+	AllocNewGrowingSegment(ctx context.Context, collectionID, partitionID, segmentID UniqueID, channelName string) (*SegmentInfo, error)
+
 	// DropSegment drops the segment from manager.
 	DropSegment(ctx context.Context, segmentID UniqueID)
 	// FlushImportSegments set importing segment state to Flushed.
@@ -111,7 +116,7 @@ var _ Manager = (*SegmentManager)(nil)
 type SegmentManager struct {
 	meta                *meta
 	mu                  lock.RWMutex
-	allocator           allocator
+	allocator           allocator.Allocator
 	helper              allocHelper
 	segments            []UniqueID
 	estimatePolicy      calUpperLimitPolicy
@@ -209,7 +214,7 @@ func defaultFlushPolicy() flushPolicy {
 }
 
 // newSegmentManager should be the only way to retrieve SegmentManager.
-func newSegmentManager(meta *meta, allocator allocator, opts ...allocOption) (*SegmentManager, error) {
+func newSegmentManager(meta *meta, allocator allocator.Allocator, opts ...allocOption) (*SegmentManager, error) {
 	manager := &SegmentManager{
 		meta:                meta,
 		allocator:           allocator,
@@ -320,7 +325,7 @@ func (s *SegmentManager) AllocSegment(ctx context.Context, collectionID UniqueID
 		return nil, err
 	}
 	for _, allocation := range newSegmentAllocations {
-		segment, err := s.openNewSegment(ctx, collectionID, partitionID, channelName, commonpb.SegmentState_Growing, datapb.SegmentLevel_L1)
+		segment, err := s.openNewSegment(ctx, collectionID, partitionID, channelName)
 		if err != nil {
 			log.Error("Failed to open new segment for segment allocation")
 			return nil, err
@@ -354,7 +359,7 @@ func isGrowing(segment *SegmentInfo) bool {
 }
 
 func (s *SegmentManager) genExpireTs(ctx context.Context) (Timestamp, error) {
-	ts, err := s.allocator.allocTimestamp(ctx)
+	ts, err := s.allocator.AllocTimestamp(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -370,12 +375,12 @@ func (s *SegmentManager) AllocImportSegment(ctx context.Context, taskID int64, c
 	log := log.Ctx(ctx)
 	ctx, sp := otel.Tracer(typeutil.DataCoordRole).Start(ctx, "open-Segment")
 	defer sp.End()
-	id, err := s.allocator.allocID(ctx)
+	id, err := s.allocator.AllocID(ctx)
 	if err != nil {
-		log.Error("failed to open new segment while allocID", zap.Error(err))
+		log.Error("failed to open new segment while AllocID", zap.Error(err))
 		return nil, err
 	}
-	ts, err := s.allocator.allocTimestamp(ctx)
+	ts, err := s.allocator.AllocTimestamp(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -417,17 +422,24 @@ func (s *SegmentManager) AllocImportSegment(ctx context.Context, taskID int64, c
 	return segment, nil
 }
 
-func (s *SegmentManager) openNewSegment(ctx context.Context, collectionID UniqueID, partitionID UniqueID,
-	channelName string, segmentState commonpb.SegmentState, level datapb.SegmentLevel,
-) (*SegmentInfo, error) {
+// AllocNewGrowingSegment allocates segment for streaming node.
+func (s *SegmentManager) AllocNewGrowingSegment(ctx context.Context, collectionID, partitionID, segmentID UniqueID, channelName string) (*SegmentInfo, error) {
+	return s.openNewSegmentWithGivenSegmentID(ctx, collectionID, partitionID, segmentID, channelName)
+}
+
+func (s *SegmentManager) openNewSegment(ctx context.Context, collectionID UniqueID, partitionID UniqueID, channelName string) (*SegmentInfo, error) {
 	log := log.Ctx(ctx)
 	ctx, sp := otel.Tracer(typeutil.DataCoordRole).Start(ctx, "open-Segment")
 	defer sp.End()
-	id, err := s.allocator.allocID(ctx)
+	id, err := s.allocator.AllocID(ctx)
 	if err != nil {
-		log.Error("failed to open new segment while allocID", zap.Error(err))
+		log.Error("failed to open new segment while AllocID", zap.Error(err))
 		return nil, err
 	}
+	return s.openNewSegmentWithGivenSegmentID(ctx, collectionID, partitionID, id, channelName)
+}
+
+func (s *SegmentManager) openNewSegmentWithGivenSegmentID(ctx context.Context, collectionID UniqueID, partitionID UniqueID, segmentID UniqueID, channelName string) (*SegmentInfo, error) {
 	maxNumOfRows, err := s.estimateMaxNumOfRows(collectionID)
 	if err != nil {
 		log.Error("failed to open new segment while estimateMaxNumOfRows", zap.Error(err))
@@ -435,14 +447,14 @@ func (s *SegmentManager) openNewSegment(ctx context.Context, collectionID Unique
 	}
 
 	segmentInfo := &datapb.SegmentInfo{
-		ID:             id,
+		ID:             segmentID,
 		CollectionID:   collectionID,
 		PartitionID:    partitionID,
 		InsertChannel:  channelName,
 		NumOfRows:      0,
-		State:          segmentState,
+		State:          commonpb.SegmentState_Growing,
 		MaxRowNum:      int64(maxNumOfRows),
-		Level:          level,
+		Level:          datapb.SegmentLevel_L1,
 		LastExpireTime: 0,
 	}
 	segment := NewSegmentInfo(segmentInfo)
@@ -450,7 +462,7 @@ func (s *SegmentManager) openNewSegment(ctx context.Context, collectionID Unique
 		log.Error("failed to add segment to DataCoord", zap.Error(err))
 		return nil, err
 	}
-	s.segments = append(s.segments, id)
+	s.segments = append(s.segments, segmentID)
 	log.Info("datacoord: estimateTotalRows: ",
 		zap.Int64("CollectionID", segmentInfo.CollectionID),
 		zap.Int64("SegmentID", segmentInfo.ID),

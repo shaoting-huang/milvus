@@ -8,11 +8,10 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 
-	"github.com/milvus-io/milvus/internal/proto/streamingpb"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/contextutil"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
-	"github.com/milvus-io/milvus/internal/util/streamingutil/typeconverter"
 	"github.com/milvus-io/milvus/pkg/log"
+	"github.com/milvus-io/milvus/pkg/streaming/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/streaming/util/options"
 	"github.com/milvus-io/milvus/pkg/streaming/util/types"
@@ -83,18 +82,10 @@ func createConsumeRequest(ctx context.Context, opts *ConsumerOptions) (context.C
 	// select server to consume.
 	ctx = contextutil.WithPickServerID(ctx, opts.Assignment.Node.ServerID)
 	// create the consumer request.
-	deliverPolicy, err := typeconverter.NewProtoFromDeliverPolicy(opts.DeliverPolicy)
-	if err != nil {
-		return nil, errors.Wrap(err, "at convert deliver policy")
-	}
-	deliverFilters, err := typeconverter.NewProtosFromDeliverFilters(opts.DeliverFilters)
-	if err != nil {
-		return nil, errors.Wrap(err, "at convert deliver filters")
-	}
 	return contextutil.WithCreateConsumer(ctx, &streamingpb.CreateConsumerRequest{
-		Pchannel:       typeconverter.NewProtoFromPChannelInfo(opts.Assignment.Channel),
-		DeliverPolicy:  deliverPolicy,
-		DeliverFilters: deliverFilters,
+		Pchannel:       types.NewProtoFromPChannelInfo(opts.Assignment.Channel),
+		DeliverPolicy:  opts.DeliverPolicy,
+		DeliverFilters: opts.DeliverFilters,
 	}), nil
 }
 
@@ -106,6 +97,7 @@ type consumerImpl struct {
 	logger           *log.MLogger
 	msgHandler       message.Handler
 	finishErr        *syncutil.Future[error]
+	txnBuilder       *message.ImmutableTxnMessageBuilder
 }
 
 // Close close the consumer client.
@@ -141,6 +133,16 @@ func (c *consumerImpl) execute() {
 // recvLoop is the recv arm of the grpc stream.
 // Throughput of the grpc framework should be ok to use single stream to receive message.
 // Once throughput is not enough, look at https://grpc.io/docs/guides/performance/ to find the solution.
+// recvLoop will always receive message from server by following sequence:
+// - message at timetick 4.
+// - message at timetick 5.
+// - txn begin message at timetick 1.
+// - txn body message at timetick 2.
+// - txn body message at timetick 3.
+// - txn commit message at timetick 6.
+// - message at timetick 7.
+// - Close.
+// - EOF.
 func (c *consumerImpl) recvLoop() (err error) {
 	defer func() {
 		if err != nil {
@@ -162,20 +164,65 @@ func (c *consumerImpl) recvLoop() (err error) {
 		}
 		switch resp := resp.Response.(type) {
 		case *streamingpb.ConsumeResponse_Consume:
-			msgID, err := message.UnmarshalMessageID(c.walName, resp.Consume.GetId().GetId())
+			msgID, err := message.UnmarshalMessageID(c.walName, resp.Consume.GetMessage().GetId().GetId())
 			if err != nil {
 				return err
 			}
-			c.msgHandler.Handle(message.NewImmutableMesasge(
+			newImmutableMsg := message.NewImmutableMesasge(
 				msgID,
 				resp.Consume.GetMessage().GetPayload(),
 				resp.Consume.GetMessage().GetProperties(),
-			))
+			)
+			if newImmutableMsg.TxnContext() != nil {
+				c.handleTxnMessage(newImmutableMsg)
+			} else {
+				if c.txnBuilder != nil {
+					panic("unreachable code: txn builder should be nil if we receive a non-txn message")
+				}
+				c.msgHandler.Handle(newImmutableMsg)
+			}
 		case *streamingpb.ConsumeResponse_Close:
 			// Should receive io.EOF after that.
 			// Do nothing at current implementation.
 		default:
 			c.logger.Warn("unknown response type", zap.Any("response", resp))
 		}
+	}
+}
+
+func (c *consumerImpl) handleTxnMessage(msg message.ImmutableMessage) {
+	switch msg.MessageType() {
+	case message.MessageTypeBeginTxn:
+		if c.txnBuilder != nil {
+			panic("unreachable code: txn builder should be nil if we receive a begin txn message")
+		}
+		beginMsg, err := message.AsImmutableBeginTxnMessageV2(msg)
+		if err != nil {
+			c.logger.Warn("failed to convert message to begin txn message", zap.Any("messageID", beginMsg.MessageID()), zap.Error(err))
+			return
+		}
+		c.txnBuilder = message.NewImmutableTxnMessageBuilder(beginMsg)
+	case message.MessageTypeCommitTxn:
+		if c.txnBuilder == nil {
+			panic("unreachable code: txn builder should not be nil if we receive a commit txn message")
+		}
+		commitMsg, err := message.AsImmutableCommitTxnMessageV2(msg)
+		if err != nil {
+			c.logger.Warn("failed to convert message to commit txn message", zap.Any("messageID", commitMsg.MessageID()), zap.Error(err))
+			c.txnBuilder = nil
+			return
+		}
+		msg, err := c.txnBuilder.Build(commitMsg)
+		c.txnBuilder = nil
+		if err != nil {
+			c.logger.Warn("failed to build txn message", zap.Any("messageID", commitMsg.MessageID()), zap.Error(err))
+			return
+		}
+		c.msgHandler.Handle(msg)
+	default:
+		if c.txnBuilder == nil {
+			panic("unreachable code: txn builder should not be nil if we receive a non-begin txn message")
+		}
+		c.txnBuilder.Add(msg)
 	}
 }

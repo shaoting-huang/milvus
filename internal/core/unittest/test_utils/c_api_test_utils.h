@@ -29,6 +29,7 @@
 #include "segcore/reduce_c.h"
 #include "segcore/segment_c.h"
 #include "futures/Future.h"
+#include "futures/future_c.h"
 #include "DataGen.h"
 #include "PbHelper.h"
 #include "c_api_test_utils.h"
@@ -174,7 +175,6 @@ get_default_schema_config_nullable() {
     return conf.c_str();
 }
 
-
 CStatus
 CSearch(CSegmentInterface c_segment,
         CSearchPlan c_plan,
@@ -194,6 +194,8 @@ CSearch(CSegmentInterface c_segment,
     mu.lock();
 
     auto [searchResult, status] = futurePtr->leakyGet();
+    future_destroy(future);
+
     if (status.error_code != 0) {
         return status;
     }

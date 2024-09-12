@@ -14,13 +14,15 @@ import (
 	"go.uber.org/atomic"
 	"google.golang.org/grpc/metadata"
 
-	"github.com/milvus-io/milvus/internal/mocks/proto/mock_streamingpb"
 	"github.com/milvus-io/milvus/internal/mocks/streamingnode/server/mock_wal"
 	"github.com/milvus-io/milvus/internal/mocks/streamingnode/server/mock_walmanager"
-	"github.com/milvus-io/milvus/internal/proto/streamingpb"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/walmanager"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/contextutil"
 	"github.com/milvus-io/milvus/pkg/log"
+	"github.com/milvus-io/milvus/pkg/mocks/streaming/proto/mock_streamingpb"
+	"github.com/milvus-io/milvus/pkg/streaming/proto/messagespb"
+	"github.com/milvus-io/milvus/pkg/streaming/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/streaming/walimpls/impls/walimplstest"
@@ -91,7 +93,11 @@ func TestProduceSendArm(t *testing.T) {
 		return errors.New("send failure")
 	})
 
+	wal := mock_wal.NewMockWAL(t)
+	wal.EXPECT().Available().Return(make(<-chan struct{}))
+
 	p := &ProduceServer{
+		wal: wal,
 		produceServer: &produceGrpcServerHelper{
 			StreamingNodeHandlerService_ProduceServer: grpcProduceServer,
 		},
@@ -110,7 +116,7 @@ func TestProduceSendArm(t *testing.T) {
 		RequestId: 1,
 		Response: &streamingpb.ProduceMessageResponse_Result{
 			Result: &streamingpb.ProduceMessageResponseResult{
-				Id: &streamingpb.MessageID{
+				Id: &messagespb.MessageID{
 					Id: walimplstest.NewTestMessageID(1).Marshal(),
 				},
 			},
@@ -122,6 +128,7 @@ func TestProduceSendArm(t *testing.T) {
 
 	// test send arm failure
 	p = &ProduceServer{
+		wal: wal,
 		produceServer: &produceGrpcServerHelper{
 			StreamingNodeHandlerService_ProduceServer: grpcProduceServer,
 		},
@@ -142,7 +149,7 @@ func TestProduceSendArm(t *testing.T) {
 		RequestId: 1,
 		Response: &streamingpb.ProduceMessageResponse_Result{
 			Result: &streamingpb.ProduceMessageResponseResult{
-				Id: &streamingpb.MessageID{
+				Id: &messagespb.MessageID{
 					Id: walimplstest.NewTestMessageID(1).Marshal(),
 				},
 			},
@@ -152,6 +159,7 @@ func TestProduceSendArm(t *testing.T) {
 
 	// test send arm failure
 	p = &ProduceServer{
+		wal: wal,
 		produceServer: &produceGrpcServerHelper{
 			StreamingNodeHandlerService_ProduceServer: grpcProduceServer,
 		},
@@ -187,10 +195,14 @@ func TestProduceServerRecvArm(t *testing.T) {
 		Name: "test",
 		Term: 1,
 	})
-	l.EXPECT().AppendAsync(mock.Anything, mock.Anything, mock.Anything).Run(func(ctx context.Context, mm message.MutableMessage, f func(message.MessageID, error)) {
+	l.EXPECT().AppendAsync(mock.Anything, mock.Anything, mock.Anything).Run(func(ctx context.Context, mm message.MutableMessage, f func(*wal.AppendResult, error)) {
 		msgID := walimplstest.NewTestMessageID(1)
-		f(msgID, nil)
+		f(&wal.AppendResult{
+			MessageID: msgID,
+			TimeTick:  100,
+		}, nil)
 	})
+	l.EXPECT().IsAvailable().Return(true)
 
 	p := &ProduceServer{
 		wal: l,
@@ -212,7 +224,7 @@ func TestProduceServerRecvArm(t *testing.T) {
 		Request: &streamingpb.ProduceRequest_Produce{
 			Produce: &streamingpb.ProduceMessageRequest{
 				RequestId: 1,
-				Message: &streamingpb.Message{
+				Message: &messagespb.Message{
 					Payload: []byte("test"),
 					Properties: map[string]string{
 						"_v": "1",
@@ -230,7 +242,7 @@ func TestProduceServerRecvArm(t *testing.T) {
 
 	// Test send error.
 	l.EXPECT().AppendAsync(mock.Anything, mock.Anything, mock.Anything).Unset()
-	l.EXPECT().AppendAsync(mock.Anything, mock.Anything, mock.Anything).Run(func(ctx context.Context, mm message.MutableMessage, f func(message.MessageID, error)) {
+	l.EXPECT().AppendAsync(mock.Anything, mock.Anything, mock.Anything).Run(func(ctx context.Context, mm message.MutableMessage, f func(*wal.AppendResult, error)) {
 		f(nil, errors.New("append error"))
 	})
 

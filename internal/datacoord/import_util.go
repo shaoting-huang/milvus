@@ -27,6 +27,7 @@ import (
 	"github.com/samber/lo"
 	"go.uber.org/zap"
 
+	"github.com/milvus-io/milvus/internal/datacoord/allocator"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
 	"github.com/milvus-io/milvus/internal/proto/internalpb"
 	"github.com/milvus-io/milvus/internal/storage"
@@ -49,9 +50,9 @@ func WrapTaskLog(task ImportTask, fields ...zap.Field) []zap.Field {
 
 func NewPreImportTasks(fileGroups [][]*internalpb.ImportFile,
 	job ImportJob,
-	alloc allocator,
+	alloc allocator.Allocator,
 ) ([]ImportTask, error) {
-	idStart, _, err := alloc.allocN(int64(len(fileGroups)))
+	idStart, _, err := alloc.AllocN(int64(len(fileGroups)))
 	if err != nil {
 		return nil, err
 	}
@@ -79,9 +80,9 @@ func NewPreImportTasks(fileGroups [][]*internalpb.ImportFile,
 func NewImportTasks(fileGroups [][]*datapb.ImportFileStats,
 	job ImportJob,
 	manager Manager,
-	alloc allocator,
+	alloc allocator.Allocator,
 ) ([]ImportTask, error) {
-	idBegin, _, err := alloc.allocN(int64(len(fileGroups)))
+	idBegin, _, err := alloc.AllocN(int64(len(fileGroups)))
 	if err != nil {
 		return nil, err
 	}
@@ -176,7 +177,7 @@ func AssemblePreImportRequest(task ImportTask, job ImportJob) *datapb.PreImportR
 	}
 }
 
-func AssembleImportRequest(task ImportTask, job ImportJob, meta *meta, alloc allocator) (*datapb.ImportRequest, error) {
+func AssembleImportRequest(task ImportTask, job ImportJob, meta *meta, alloc allocator.Allocator) (*datapb.ImportRequest, error) {
 	requestSegments := make([]*datapb.ImportRequestSegment, 0)
 	for _, segmentID := range task.(*importTask).GetSegmentIDs() {
 		segment := meta.GetSegment(segmentID)
@@ -191,7 +192,7 @@ func AssembleImportRequest(task ImportTask, job ImportJob, meta *meta, alloc all
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	ts, err := alloc.allocTimestamp(ctx)
+	ts, err := alloc.AllocTimestamp(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +204,7 @@ func AssembleImportRequest(task ImportTask, job ImportJob, meta *meta, alloc all
 	// Allocated IDs are used for rowID and the BEGINNING of the logID.
 	allocNum := totalRows + 1
 
-	idBegin, idEnd, err := alloc.allocN(allocNum)
+	idBegin, idEnd, err := alloc.AllocN(allocNum)
 	if err != nil {
 		return nil, err
 	}
@@ -226,13 +227,20 @@ func AssembleImportRequest(task ImportTask, job ImportJob, meta *meta, alloc all
 	}, nil
 }
 
-func RegroupImportFiles(job ImportJob, files []*datapb.ImportFileStats) [][]*datapb.ImportFileStats {
+func RegroupImportFiles(job ImportJob, files []*datapb.ImportFileStats, allDiskIndex bool) [][]*datapb.ImportFileStats {
 	if len(files) == 0 {
 		return nil
 	}
 
+	var segmentMaxSize int
+	if allDiskIndex {
+		// Only if all vector fields index type are DiskANN, recalc segment max size here.
+		segmentMaxSize = Params.DataCoordCfg.DiskSegmentMaxSize.GetAsInt() * 1024 * 1024
+	} else {
+		// If some vector fields index type are not DiskANN, recalc segment max size using default policy.
+		segmentMaxSize = Params.DataCoordCfg.SegmentMaxSize.GetAsInt() * 1024 * 1024
+	}
 	isL0Import := importutilv2.IsL0Import(job.GetOptions())
-	segmentMaxSize := paramtable.Get().DataCoordCfg.SegmentMaxSize.GetAsInt() * 1024 * 1024
 	if isL0Import {
 		segmentMaxSize = paramtable.Get().DataNodeCfg.FlushDeleteBufferBytes.GetAsInt()
 	}
@@ -270,6 +278,10 @@ func RegroupImportFiles(job ImportJob, files []*datapb.ImportFileStats) [][]*dat
 
 func CheckDiskQuota(job ImportJob, meta *meta, imeta ImportMeta) (int64, error) {
 	if !Params.QuotaConfig.DiskProtectionEnabled.GetAsBool() {
+		return 0, nil
+	}
+	if importutilv2.SkipDiskQuotaCheck(job.GetOptions()) {
+		log.Info("skip disk quota check for import", zap.Int64("jobID", job.GetJobID()))
 		return 0, nil
 	}
 

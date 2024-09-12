@@ -100,6 +100,7 @@ typedef struct CMmapConfig {
     uint64_t disk_limit;
     uint64_t fix_file_size;
     bool growing_enable_mmap;
+    bool enable_mmap;
 } CMmapConfig;
 
 typedef struct CTraceConfig {
@@ -107,6 +108,7 @@ typedef struct CTraceConfig {
     float sampleFraction;
     const char* jaegerURL;
     const char* otlpEndpoint;
+    const char* otlpMethod;
     bool oltpSecure;
 
     int nodeID;

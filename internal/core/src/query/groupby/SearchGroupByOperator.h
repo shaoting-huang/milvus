@@ -68,11 +68,12 @@ class SealedDataGetter : public DataGetter<T> {
             if constexpr (std::is_same_v<T, std::string>) {
                 str_field_data_ =
                     std::make_shared<std::vector<std::string_view>>(
-                        segment.chunk_view<std::string_view>(field_id, 0));
+                        segment.chunk_view<std::string_view>(field_id, 0)
+                            .first);
             } else {
                 auto span = segment.chunk_data<T>(field_id, 0);
-                field_data_ =
-                    std::make_shared<Span<T>>(span.data(), span.row_count());
+                field_data_ = std::make_shared<Span<T>>(
+                    span.data(), span.valid_data(), span.row_count());
             }
         } else if (segment.HasIndex(field_id)) {
             this->field_index_ = &(segment.chunk_scalar_index<T>(field_id, 0));
@@ -181,6 +182,7 @@ GroupIteratorsByType(
     const std::vector<std::shared_ptr<VectorIterator>>& iterators,
     int64_t topK,
     int64_t group_size,
+    bool group_strict_size,
     const DataGetter<T>& data_getter,
     std::vector<GroupByValueType>& group_by_values,
     std::vector<int64_t>& seg_offsets,
@@ -194,19 +196,31 @@ struct GroupByMap {
     std::unordered_map<T, int> group_map_{};
     int group_capacity_{0};
     int group_size_{0};
-    int enough_group_count{0};
+    int enough_group_count_{0};
+    bool strict_group_size_{false};
 
  public:
-    GroupByMap(int group_capacity, int group_size)
-        : group_capacity_(group_capacity), group_size_(group_size){};
+    GroupByMap(int group_capacity,
+               int group_size,
+               bool strict_group_size = false)
+        : group_capacity_(group_capacity),
+          group_size_(group_size),
+          strict_group_size_(strict_group_size){};
     bool
     IsGroupResEnough() {
-        return group_map_.size() == group_capacity_ &&
-               enough_group_count == group_capacity_;
+        bool enough = false;
+        if (strict_group_size_) {
+            enough = group_map_.size() == group_capacity_ &&
+                     enough_group_count_ == group_capacity_;
+        } else {
+            enough = group_map_.size() == group_capacity_;
+        }
+        return enough;
     }
     bool
     Push(const T& t) {
-        if (group_map_.size() >= group_capacity_ && group_map_[t] == 0){
+        if (group_map_.size() >= group_capacity_ &&
+            group_map_.find(t) == group_map_.end()) {
             return false;
         }
         if (group_map_[t] >= group_size_) {
@@ -217,7 +231,7 @@ struct GroupByMap {
         }
         group_map_[t] += 1;
         if (group_map_[t] >= group_size_) {
-            enough_group_count += 1;
+            enough_group_count_ += 1;
         }
         return true;
     }
@@ -228,6 +242,7 @@ void
 GroupIteratorResult(const std::shared_ptr<VectorIterator>& iterator,
                     int64_t topK,
                     int64_t group_size,
+                    bool group_strict_size,
                     const DataGetter<T>& data_getter,
                     std::vector<GroupByValueType>& group_by_values,
                     std::vector<int64_t>& offsets,

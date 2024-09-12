@@ -23,12 +23,12 @@ import (
 	"time"
 
 	"github.com/cockroachdb/errors"
-	"github.com/golang/protobuf/proto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
@@ -39,6 +39,7 @@ import (
 	"github.com/milvus-io/milvus/internal/proto/querypb"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/dependency"
+	"github.com/milvus-io/milvus/internal/util/reduce"
 	"github.com/milvus-io/milvus/pkg/common"
 	"github.com/milvus-io/milvus/pkg/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/util/merr"
@@ -60,6 +61,9 @@ func TestSearchTask_PostExecute(t *testing.T) {
 	defer rc.Close()
 	require.NoError(t, err)
 	mgr := newShardClientMgr()
+	qc.EXPECT().ShowCollections(mock.Anything, mock.Anything).Return(&querypb.ShowCollectionsResponse{
+		Status: merr.Success(),
+	}, nil).Maybe()
 	err = InitMetaCache(ctx, rc, qc, mgr)
 	require.NoError(t, err)
 
@@ -191,6 +195,7 @@ func TestSearchTask_PreExecute(t *testing.T) {
 	defer rc.Close()
 	require.NoError(t, err)
 	mgr := newShardClientMgr()
+	qc.EXPECT().ShowCollections(mock.Anything, mock.Anything).Return(&querypb.ShowCollectionsResponse{}, nil).Maybe()
 	err = InitMetaCache(ctx, rc, qc, mgr)
 	require.NoError(t, err)
 
@@ -335,6 +340,7 @@ func TestSearchTaskV2_Execute(t *testing.T) {
 
 	defer rc.Close()
 	mgr := newShardClientMgr()
+	qc.EXPECT().ShowCollections(mock.Anything, mock.Anything).Return(&querypb.ShowCollectionsResponse{}, nil).Maybe()
 	err = InitMetaCache(ctx, rc, qc, mgr)
 	require.NoError(t, err)
 
@@ -1242,7 +1248,8 @@ func Test_checkSearchResultData(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			err := checkSearchResultData(test.args.data, test.args.nq, test.args.topk)
+			pkLength := typeutil.GetSizeOfIDs(test.args.data.GetIds())
+			err := checkSearchResultData(test.args.data, test.args.nq, test.args.topk, pkLength)
 
 			if test.wantErr {
 				assert.Error(t, err)
@@ -1517,8 +1524,9 @@ func TestTaskSearch_reduceSearchResultData(t *testing.T) {
 		}
 		for _, test := range tests {
 			t.Run(test.description, func(t *testing.T) {
-				reduced, err := reduceSearchResult(context.TODO(),
-					NewReduceSearchResultInfo(results, nq, topk, metric.L2, schemapb.DataType_Int64, test.offset, queryInfo))
+				reduced, err := reduceSearchResult(context.TODO(), results,
+					reduce.NewReduceSearchResultInfo(nq, topk).WithMetricType(metric.L2).WithPkType(schemapb.DataType_Int64).
+						WithOffset(test.offset).WithGroupByField(queryInfo.GetGroupByFieldId()).WithGroupSize(queryInfo.GetGroupSize()))
 				assert.NoError(t, err)
 				assert.Equal(t, test.outData, reduced.GetResults().GetIds().GetIntId().GetData())
 				assert.Equal(t, []int64{test.limit, test.limit}, reduced.GetResults().GetTopks())
@@ -1569,8 +1577,9 @@ func TestTaskSearch_reduceSearchResultData(t *testing.T) {
 		}
 		for _, test := range lessThanLimitTests {
 			t.Run(test.description, func(t *testing.T) {
-				reduced, err := reduceSearchResult(context.TODO(), NewReduceSearchResultInfo(results, nq, topk,
-					metric.L2, schemapb.DataType_Int64, test.offset, queryInfo))
+				reduced, err := reduceSearchResult(context.TODO(), results,
+					reduce.NewReduceSearchResultInfo(nq, topk).WithMetricType(metric.L2).WithPkType(schemapb.DataType_Int64).WithOffset(test.offset).
+						WithGroupByField(queryInfo.GetGroupByFieldId()).WithGroupSize(queryInfo.GetGroupSize()))
 				assert.NoError(t, err)
 				assert.Equal(t, test.outData, reduced.GetResults().GetIds().GetIntId().GetData())
 				assert.Equal(t, []int64{test.outLimit, test.outLimit}, reduced.GetResults().GetTopks())
@@ -1598,9 +1607,8 @@ func TestTaskSearch_reduceSearchResultData(t *testing.T) {
 			GroupByFieldId: -1,
 		}
 
-		reduced, err := reduceSearchResult(context.TODO(), NewReduceSearchResultInfo(
-			results, nq, topk, metric.L2, schemapb.DataType_Int64, 0, queryInfo))
-
+		reduced, err := reduceSearchResult(context.TODO(), results,
+			reduce.NewReduceSearchResultInfo(nq, topk).WithMetricType(metric.L2).WithPkType(schemapb.DataType_Int64).WithGroupByField(queryInfo.GetGroupByFieldId()).WithGroupSize(queryInfo.GetGroupSize()))
 		assert.NoError(t, err)
 		assert.Equal(t, resultData, reduced.GetResults().GetIds().GetIntId().GetData())
 		assert.Equal(t, []int64{5, 5}, reduced.GetResults().GetTopks())
@@ -1628,9 +1636,8 @@ func TestTaskSearch_reduceSearchResultData(t *testing.T) {
 		queryInfo := &planpb.QueryInfo{
 			GroupByFieldId: -1,
 		}
-
-		reduced, err := reduceSearchResult(context.TODO(), NewReduceSearchResultInfo(results,
-			nq, topk, metric.L2, schemapb.DataType_VarChar, 0, queryInfo))
+		reduced, err := reduceSearchResult(context.TODO(), results,
+			reduce.NewReduceSearchResultInfo(nq, topk).WithMetricType(metric.L2).WithPkType(schemapb.DataType_VarChar).WithGroupByField(queryInfo.GetGroupByFieldId()).WithGroupSize(queryInfo.GetGroupSize()))
 
 		assert.NoError(t, err)
 		assert.Equal(t, resultData, reduced.GetResults().GetIds().GetStrId().GetData())
@@ -1701,9 +1708,10 @@ func TestTaskSearch_reduceGroupBySearchResultData(t *testing.T) {
 			}
 			queryInfo := &planpb.QueryInfo{
 				GroupByFieldId: 1,
+				GroupSize:      1,
 			}
-			reduced, err := reduceSearchResult(context.TODO(), NewReduceSearchResultInfo(results, nq, topK, metric.L2,
-				schemapb.DataType_Int64, 0, queryInfo))
+			reduced, err := reduceSearchResult(context.TODO(), results,
+				reduce.NewReduceSearchResultInfo(nq, topK).WithMetricType(metric.L2).WithPkType(schemapb.DataType_Int64).WithGroupByField(queryInfo.GetGroupByFieldId()).WithGroupSize(queryInfo.GetGroupSize()))
 			resultIDs := reduced.GetResults().GetIds().GetIntId().Data
 			resultScores := reduced.GetResults().GetScores()
 			resultGroupByValues := reduced.GetResults().GetGroupByFieldValue().GetScalars().GetLongData().GetData()
@@ -1760,9 +1768,10 @@ func TestTaskSearch_reduceGroupBySearchResultDataWithOffset(t *testing.T) {
 
 	queryInfo := &planpb.QueryInfo{
 		GroupByFieldId: 1,
+		GroupSize:      1,
 	}
-	reduced, err := reduceSearchResult(context.TODO(), NewReduceSearchResultInfo(results, nq, limit+offset, metric.L2,
-		schemapb.DataType_Int64, offset, queryInfo))
+	reduced, err := reduceSearchResult(context.TODO(), results,
+		reduce.NewReduceSearchResultInfo(nq, limit+offset).WithMetricType(metric.L2).WithPkType(schemapb.DataType_Int64).WithOffset(offset).WithGroupByField(queryInfo.GetGroupByFieldId()).WithGroupSize(queryInfo.GetGroupSize()))
 	resultIDs := reduced.GetResults().GetIds().GetIntId().Data
 	resultScores := reduced.GetResults().GetScores()
 	resultGroupByValues := reduced.GetResults().GetGroupByFieldValue().GetScalars().GetLongData().GetData()
@@ -1770,6 +1779,265 @@ func TestTaskSearch_reduceGroupBySearchResultDataWithOffset(t *testing.T) {
 	assert.EqualValues(t, expectedScores, resultScores)
 	assert.EqualValues(t, expectedGroupByValues, resultGroupByValues)
 	assert.NoError(t, err)
+}
+
+func TestTaskSearch_reduceGroupBySearchWithGroupSizeMoreThanOne(t *testing.T) {
+	var (
+		nq   int64 = 2
+		topK int64 = 5
+	)
+	ids := [][]int64{
+		{1, 3, 5, 7, 9, 1, 3, 5, 7, 9},
+		{2, 4, 6, 8, 10, 2, 4, 6, 8, 10},
+	}
+	scores := [][]float32{
+		{10, 8, 6, 4, 2, 10, 8, 6, 4, 2},
+		{9, 7, 5, 3, 1, 9, 7, 5, 3, 1},
+	}
+
+	groupByValuesArr := [][][]int64{
+		{
+			{1, 2, 3, 4, 5, 1, 2, 3, 4, 5},
+			{1, 2, 3, 4, 5, 1, 2, 3, 4, 5},
+		},
+		{
+			{1, 2, 3, 4, 5, 1, 2, 3, 4, 5},
+			{6, 8, 3, 4, 5, 6, 8, 3, 4, 5},
+		},
+	}
+	expectedIDs := [][]int64{
+		{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+		{1, 2, 3, 4, 5, 6, 1, 2, 3, 4, 5, 6},
+	}
+	expectedScores := [][]float32{
+		{-10, -9, -8, -7, -6, -5, -4, -3, -2, -1, -10, -9, -8, -7, -6, -5, -4, -3, -2, -1},
+		{-10, -9, -8, -7, -6, -5, -10, -9, -8, -7, -6, -5},
+	}
+	expectedGroupByValues := [][]int64{
+		{1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5},
+		{1, 6, 2, 8, 3, 3, 1, 6, 2, 8, 3, 3},
+	}
+
+	for i, groupByValues := range groupByValuesArr {
+		t.Run("Group By correctness", func(t *testing.T) {
+			var results []*schemapb.SearchResultData
+			for j := range ids {
+				result := getSearchResultData(nq, topK)
+				result.Ids.IdField = &schemapb.IDs_IntId{IntId: &schemapb.LongArray{Data: ids[j]}}
+				result.Scores = scores[j]
+				result.Topks = []int64{topK, topK}
+				result.GroupByFieldValue = &schemapb.FieldData{
+					Type: schemapb.DataType_Int64,
+					Field: &schemapb.FieldData_Scalars{
+						Scalars: &schemapb.ScalarField{
+							Data: &schemapb.ScalarField_LongData{
+								LongData: &schemapb.LongArray{
+									Data: groupByValues[j],
+								},
+							},
+						},
+					},
+				}
+				results = append(results, result)
+			}
+			queryInfo := &planpb.QueryInfo{
+				GroupByFieldId: 1,
+				GroupSize:      2,
+			}
+			reduced, err := reduceSearchResult(context.TODO(), results,
+				reduce.NewReduceSearchResultInfo(nq, topK).WithMetricType(metric.L2).WithPkType(schemapb.DataType_Int64).WithGroupByField(queryInfo.GetGroupByFieldId()).WithGroupSize(queryInfo.GetGroupSize()))
+
+			resultIDs := reduced.GetResults().GetIds().GetIntId().Data
+			resultScores := reduced.GetResults().GetScores()
+			resultGroupByValues := reduced.GetResults().GetGroupByFieldValue().GetScalars().GetLongData().GetData()
+			assert.EqualValues(t, expectedIDs[i], resultIDs)
+			assert.EqualValues(t, expectedScores[i], resultScores)
+			assert.EqualValues(t, expectedGroupByValues[i], resultGroupByValues)
+			assert.NoError(t, err)
+		})
+	}
+}
+
+func TestTaskSearch_reduceAdvanceSearchGroupBy(t *testing.T) {
+	groupByField := int64(101)
+	nq := int64(1)
+	subSearchResultData := make([]*schemapb.SearchResultData, 0)
+	topK := int64(3)
+	{
+		scores := []float32{0.9, 0.7, 0.65, 0.55, 0.52, 0.51, 0.5, 0.45, 0.43}
+		ids := []int64{7, 5, 6, 11, 22, 14, 31, 23, 37}
+		tops := []int64{9}
+		groupFieldValue := []string{"aaa", "bbb", "ccc", "bbb", "bbb", "ccc", "aaa", "ccc", "aaa"}
+		groupByVals := getFieldData("string", groupByField, schemapb.DataType_VarChar, groupFieldValue, 1)
+		result1 := &schemapb.SearchResultData{
+			Scores: scores,
+			TopK:   topK,
+			Ids: &schemapb.IDs{
+				IdField: &schemapb.IDs_IntId{
+					IntId: &schemapb.LongArray{
+						Data: ids,
+					},
+				},
+			},
+			NumQueries:        nq,
+			Topks:             tops,
+			GroupByFieldValue: groupByVals,
+		}
+		subSearchResultData = append(subSearchResultData, result1)
+	}
+	{
+		scores := []float32{0.83, 0.72, 0.72, 0.65, 0.63, 0.55, 0.52, 0.51, 0.48}
+		ids := []int64{17, 15, 16, 21, 32, 24, 41, 33, 27}
+		tops := []int64{9}
+		groupFieldValue := []string{"xxx", "bbb", "ddd", "bbb", "bbb", "ddd", "xxx", "ddd", "xxx"}
+		groupByVals := getFieldData("string", groupByField, schemapb.DataType_VarChar, groupFieldValue, 1)
+		result2 := &schemapb.SearchResultData{
+			TopK:   topK,
+			Scores: scores,
+			Ids: &schemapb.IDs{
+				IdField: &schemapb.IDs_IntId{
+					IntId: &schemapb.LongArray{
+						Data: ids,
+					},
+				},
+			},
+			Topks:             tops,
+			NumQueries:        nq,
+			GroupByFieldValue: groupByVals,
+		}
+		subSearchResultData = append(subSearchResultData, result2)
+	}
+	groupSize := int64(3)
+
+	reducedRes, err := reduceSearchResult(context.Background(), subSearchResultData,
+		reduce.NewReduceSearchResultInfo(nq, topK).WithMetricType(metric.IP).WithPkType(schemapb.DataType_Int64).WithGroupByField(groupByField).WithGroupSize(groupSize).WithAdvance(true))
+	assert.NoError(t, err)
+	// reduce_advance_groupby will only merge results from different delegator without reducing any result
+	assert.Equal(t, 18, len(reducedRes.GetResults().Ids.GetIntId().Data))
+	assert.Equal(t, 18, len(reducedRes.GetResults().GetScores()))
+	assert.Equal(t, 18, len(reducedRes.GetResults().GetGroupByFieldValue().GetScalars().GetStringData().Data))
+	assert.Equal(t, topK, reducedRes.GetResults().GetTopK())
+	assert.Equal(t, []int64{18}, reducedRes.GetResults().GetTopks())
+
+	assert.Equal(t, []int64{7, 5, 6, 11, 22, 14, 31, 23, 37, 17, 15, 16, 21, 32, 24, 41, 33, 27}, reducedRes.GetResults().Ids.GetIntId().Data)
+	assert.Equal(t, []float32{0.9, 0.7, 0.65, 0.55, 0.52, 0.51, 0.5, 0.45, 0.43, 0.83, 0.72, 0.72, 0.65, 0.63, 0.55, 0.52, 0.51, 0.48}, reducedRes.GetResults().GetScores())
+	assert.Equal(t, []string{"aaa", "bbb", "ccc", "bbb", "bbb", "ccc", "aaa", "ccc", "aaa", "xxx", "bbb", "ddd", "bbb", "bbb", "ddd", "xxx", "ddd", "xxx"}, reducedRes.GetResults().GetGroupByFieldValue().GetScalars().GetStringData().Data)
+}
+
+func TestTaskSearch_reduceAdvanceSearchGroupByShortCut(t *testing.T) {
+	groupByField := int64(101)
+	nq := int64(1)
+	subSearchResultData := make([]*schemapb.SearchResultData, 0)
+	topK := int64(3)
+	{
+		scores := []float32{0.9, 0.7, 0.65, 0.55, 0.52, 0.51, 0.5, 0.45, 0.43}
+		ids := []int64{7, 5, 6, 11, 22, 14, 31, 23, 37}
+		tops := []int64{9}
+		groupFieldValue := []string{"aaa", "bbb", "ccc", "bbb", "bbb", "ccc", "aaa", "ccc", "aaa"}
+		groupByVals := getFieldData("string", groupByField, schemapb.DataType_VarChar, groupFieldValue, 1)
+		result1 := &schemapb.SearchResultData{
+			Scores: scores,
+			TopK:   topK,
+			Ids: &schemapb.IDs{
+				IdField: &schemapb.IDs_IntId{
+					IntId: &schemapb.LongArray{
+						Data: ids,
+					},
+				},
+			},
+			NumQueries:        nq,
+			Topks:             tops,
+			GroupByFieldValue: groupByVals,
+		}
+		subSearchResultData = append(subSearchResultData, result1)
+	}
+	groupSize := int64(3)
+
+	reducedRes, err := reduceSearchResult(context.Background(), subSearchResultData,
+		reduce.NewReduceSearchResultInfo(nq, topK).WithMetricType(metric.L2).WithPkType(schemapb.DataType_Int64).WithGroupByField(groupByField).WithGroupSize(groupSize).WithAdvance(true))
+
+	assert.NoError(t, err)
+	// reduce_advance_groupby will only merge results from different delegator without reducing any result
+	assert.Equal(t, 9, len(reducedRes.GetResults().Ids.GetIntId().Data))
+	assert.Equal(t, 9, len(reducedRes.GetResults().GetScores()))
+	assert.Equal(t, 9, len(reducedRes.GetResults().GetGroupByFieldValue().GetScalars().GetStringData().Data))
+	assert.Equal(t, topK, reducedRes.GetResults().GetTopK())
+	assert.Equal(t, []int64{9}, reducedRes.GetResults().GetTopks())
+
+	assert.Equal(t, []int64{7, 5, 6, 11, 22, 14, 31, 23, 37}, reducedRes.GetResults().Ids.GetIntId().Data)
+	assert.Equal(t, []float32{0.9, 0.7, 0.65, 0.55, 0.52, 0.51, 0.5, 0.45, 0.43}, reducedRes.GetResults().GetScores())
+	assert.Equal(t, []string{"aaa", "bbb", "ccc", "bbb", "bbb", "ccc", "aaa", "ccc", "aaa"}, reducedRes.GetResults().GetGroupByFieldValue().GetScalars().GetStringData().Data)
+}
+
+func TestTaskSearch_reduceAdvanceSearchGroupByMultipleNq(t *testing.T) {
+	groupByField := int64(101)
+	nq := int64(2)
+	subSearchResultData := make([]*schemapb.SearchResultData, 0)
+	topK := int64(2)
+	groupSize := int64(2)
+	{
+		scores := []float32{0.9, 0.7, 0.65, 0.55, 0.51, 0.5, 0.45, 0.43}
+		ids := []int64{7, 5, 6, 11, 14, 31, 23, 37}
+		tops := []int64{4, 4}
+		groupFieldValue := []string{"ccc", "bbb", "ccc", "bbb", "aaa", "xxx", "xxx", "aaa"}
+		groupByVals := getFieldData("string", groupByField, schemapb.DataType_VarChar, groupFieldValue, 1)
+		result1 := &schemapb.SearchResultData{
+			Scores: scores,
+			TopK:   topK,
+			Ids: &schemapb.IDs{
+				IdField: &schemapb.IDs_IntId{
+					IntId: &schemapb.LongArray{
+						Data: ids,
+					},
+				},
+			},
+			NumQueries:        nq,
+			Topks:             tops,
+			GroupByFieldValue: groupByVals,
+		}
+		subSearchResultData = append(subSearchResultData, result1)
+	}
+	{
+		scores := []float32{0.83, 0.72, 0.72, 0.65, 0.63, 0.55, 0.52, 0.51}
+		ids := []int64{17, 15, 16, 21, 32, 24, 41, 33}
+		tops := []int64{4, 4}
+		groupFieldValue := []string{"ddd", "bbb", "ddd", "bbb", "rrr", "sss", "rrr", "sss"}
+		groupByVals := getFieldData("string", groupByField, schemapb.DataType_VarChar, groupFieldValue, 1)
+		result2 := &schemapb.SearchResultData{
+			TopK:   topK,
+			Scores: scores,
+			Ids: &schemapb.IDs{
+				IdField: &schemapb.IDs_IntId{
+					IntId: &schemapb.LongArray{
+						Data: ids,
+					},
+				},
+			},
+			Topks:             tops,
+			NumQueries:        nq,
+			GroupByFieldValue: groupByVals,
+		}
+		subSearchResultData = append(subSearchResultData, result2)
+	}
+
+	reducedRes, err := reduceSearchResult(context.Background(), subSearchResultData,
+		reduce.NewReduceSearchResultInfo(nq, topK).WithMetricType(metric.IP).WithPkType(schemapb.DataType_Int64).WithGroupByField(groupByField).WithGroupSize(groupSize).WithAdvance(true))
+	assert.NoError(t, err)
+	// reduce_advance_groupby will only merge results from different delegator without reducing any result
+	assert.Equal(t, 16, len(reducedRes.GetResults().Ids.GetIntId().Data))
+	assert.Equal(t, 16, len(reducedRes.GetResults().GetScores()))
+	assert.Equal(t, 16, len(reducedRes.GetResults().GetGroupByFieldValue().GetScalars().GetStringData().Data))
+
+	assert.Equal(t, topK, reducedRes.GetResults().GetTopK())
+	assert.Equal(t, []int64{8, 8}, reducedRes.GetResults().GetTopks())
+
+	assert.Equal(t, []int64{7, 5, 6, 11, 17, 15, 16, 21, 14, 31, 23, 37, 32, 24, 41, 33}, reducedRes.GetResults().Ids.GetIntId().Data)
+	assert.Equal(t, []float32{0.9, 0.7, 0.65, 0.55, 0.83, 0.72, 0.72, 0.65, 0.51, 0.5, 0.45, 0.43, 0.63, 0.55, 0.52, 0.51}, reducedRes.GetResults().GetScores())
+	assert.Equal(t, []string{"ccc", "bbb", "ccc", "bbb", "ddd", "bbb", "ddd", "bbb", "aaa", "xxx", "xxx", "aaa", "rrr", "sss", "rrr", "sss"}, reducedRes.GetResults().GetGroupByFieldValue().GetScalars().GetStringData().Data)
+
+	fmt.Println(reducedRes.GetResults().Ids.GetIntId().Data)
+	fmt.Println(reducedRes.GetResults().GetScores())
+	fmt.Println(reducedRes.GetResults().GetGroupByFieldValue().GetScalars().GetStringData().Data)
 }
 
 func TestSearchTask_ErrExecute(t *testing.T) {
@@ -1786,6 +2054,7 @@ func TestSearchTask_ErrExecute(t *testing.T) {
 	)
 
 	qn.EXPECT().GetComponentStates(mock.Anything, mock.Anything).Return(nil, nil).Maybe()
+	qc.EXPECT().ShowCollections(mock.Anything, mock.Anything).Return(&querypb.ShowCollectionsResponse{}, nil).Maybe()
 
 	mgr := NewMockShardClientManager(t)
 	mgr.EXPECT().GetClient(mock.Anything, mock.Anything).Return(qn, nil).Maybe()
@@ -2096,6 +2365,25 @@ func TestTaskSearch_parseQueryInfo(t *testing.T) {
 		fields = append(fields, &schemapb.FieldSchema{
 			FieldID: int64(101),
 			Name:    "string_field",
+		})
+		schema := &schemapb.CollectionSchema{
+			Fields: fields,
+		}
+		info, _, err := parseSearchInfo(normalParam, schema, false)
+		assert.Nil(t, info)
+		assert.ErrorIs(t, err, merr.ErrParameterInvalid)
+	})
+	t.Run("check nullable and groupBy", func(t *testing.T) {
+		normalParam := getValidSearchParams()
+		normalParam = append(normalParam, &commonpb.KeyValuePair{
+			Key:   GroupByFieldKey,
+			Value: "string_field",
+		})
+		fields := make([]*schemapb.FieldSchema, 0)
+		fields = append(fields, &schemapb.FieldSchema{
+			FieldID:  int64(101),
+			Name:     "string_field",
+			Nullable: true,
 		})
 		schema := &schemapb.CollectionSchema{
 			Fields: fields,
@@ -2553,6 +2841,29 @@ func TestSearchTask_CanSkipAllocTimestamp(t *testing.T) {
 		assert.False(t, skip)
 	})
 
+	t.Run("legacy_guarantee_ts", func(t *testing.T) {
+		st := &searchTask{
+			request: &milvuspb.SearchRequest{
+				Base:                  nil,
+				DbName:                dbName,
+				CollectionName:        collName,
+				UseDefaultConsistency: false,
+				ConsistencyLevel:      commonpb.ConsistencyLevel_Strong,
+			},
+		}
+
+		skip := st.CanSkipAllocTimestamp()
+		assert.False(t, skip)
+
+		st.request.GuaranteeTimestamp = 1 // eventually
+		skip = st.CanSkipAllocTimestamp()
+		assert.True(t, skip)
+
+		st.request.GuaranteeTimestamp = 2 // bounded
+		skip = st.CanSkipAllocTimestamp()
+		assert.True(t, skip)
+	})
+
 	t.Run("failed", func(t *testing.T) {
 		mockMetaCache.ExpectedCalls = nil
 		mockMetaCache.EXPECT().GetCollectionID(mock.Anything, mock.Anything, mock.Anything).Return(collID, nil)
@@ -2733,30 +3044,50 @@ func (s *MaterializedViewTestSuite) TestMvEnabledPartitionKeyOnVarChar() {
 }
 
 func (s *MaterializedViewTestSuite) TestMvEnabledPartitionKeyOnVarCharWithIsolation() {
-	task := s.getSearchTask()
-	task.enableMaterializedView = true
-	task.request.Dsl = testVarCharField + " == \"a\""
-	schema := ConstructCollectionSchemaWithPartitionKey(s.colName, s.fieldName2Types, testInt64Field, testVarCharField, false)
-	schemaInfo := newSchemaInfo(schema)
-	s.mockMetaCache.EXPECT().GetCollectionSchema(mock.Anything, mock.Anything, mock.Anything).Return(schemaInfo, nil)
-	s.mockMetaCache.EXPECT().GetPartitionsIndex(mock.Anything, mock.Anything, mock.Anything).Return([]string{"partition_1", "partition_2"}, nil)
-	s.mockMetaCache.EXPECT().GetPartitions(mock.Anything, mock.Anything, mock.Anything).Return(map[string]int64{"partition_1": 1, "partition_2": 2}, nil)
-	err := task.PreExecute(s.ctx)
-	s.NoError(err)
-	s.NotZero(len(task.queryInfos))
-	s.Equal(true, task.queryInfos[0].MaterializedViewInvolved)
+	isAdanceds := []bool{true, false}
+	for _, isAdvanced := range isAdanceds {
+		task := s.getSearchTask()
+		task.enableMaterializedView = true
+		task.request.Dsl = testVarCharField + " == \"a\""
+		task.IsAdvanced = isAdvanced
+		schema := ConstructCollectionSchemaWithPartitionKey(s.colName, s.fieldName2Types, testInt64Field, testVarCharField, false)
+		schemaInfo := newSchemaInfo(schema)
+		s.mockMetaCache.EXPECT().GetCollectionSchema(mock.Anything, mock.Anything, mock.Anything).Return(schemaInfo, nil)
+		s.mockMetaCache.EXPECT().GetPartitionsIndex(mock.Anything, mock.Anything, mock.Anything).Return([]string{"partition_1", "partition_2"}, nil)
+		s.mockMetaCache.EXPECT().GetPartitions(mock.Anything, mock.Anything, mock.Anything).Return(map[string]int64{"partition_1": 1, "partition_2": 2}, nil)
+		err := task.PreExecute(s.ctx)
+		s.NoError(err)
+		s.NotZero(len(task.queryInfos))
+		s.Equal(true, task.queryInfos[0].MaterializedViewInvolved)
+	}
 }
 
 func (s *MaterializedViewTestSuite) TestMvEnabledPartitionKeyOnVarCharWithIsolationInvalid() {
-	task := s.getSearchTask()
-	task.enableMaterializedView = true
-	task.request.Dsl = testVarCharField + " in [\"a\", \"b\"]"
-	schema := ConstructCollectionSchemaWithPartitionKey(s.colName, s.fieldName2Types, testInt64Field, testVarCharField, false)
-	schemaInfo := newSchemaInfo(schema)
-	s.mockMetaCache.EXPECT().GetCollectionSchema(mock.Anything, mock.Anything, mock.Anything).Return(schemaInfo, nil)
-	s.mockMetaCache.EXPECT().GetPartitionsIndex(mock.Anything, mock.Anything, mock.Anything).Return([]string{"partition_1", "partition_2"}, nil)
-	s.mockMetaCache.EXPECT().GetPartitions(mock.Anything, mock.Anything, mock.Anything).Return(map[string]int64{"partition_1": 1, "partition_2": 2}, nil)
-	s.ErrorContains(task.PreExecute(s.ctx), "partition key isolation does not support IN")
+	isAdanceds := []bool{true, false}
+	for _, isAdvanced := range isAdanceds {
+		task := s.getSearchTask()
+		task.enableMaterializedView = true
+		task.IsAdvanced = isAdvanced
+		task.request.Dsl = testVarCharField + " in [\"a\", \"b\"]"
+		schema := ConstructCollectionSchemaWithPartitionKey(s.colName, s.fieldName2Types, testInt64Field, testVarCharField, false)
+		schemaInfo := newSchemaInfo(schema)
+		s.mockMetaCache.EXPECT().GetCollectionSchema(mock.Anything, mock.Anything, mock.Anything).Return(schemaInfo, nil)
+		s.ErrorContains(task.PreExecute(s.ctx), "partition key isolation does not support IN")
+	}
+}
+
+func (s *MaterializedViewTestSuite) TestMvEnabledPartitionKeyOnVarCharWithIsolationInvalidOr() {
+	isAdanceds := []bool{true, false}
+	for _, isAdvanced := range isAdanceds {
+		task := s.getSearchTask()
+		task.enableMaterializedView = true
+		task.IsAdvanced = isAdvanced
+		task.request.Dsl = testVarCharField + " == \"a\" || " + testVarCharField + "  == \"b\""
+		schema := ConstructCollectionSchemaWithPartitionKey(s.colName, s.fieldName2Types, testInt64Field, testVarCharField, false)
+		schemaInfo := newSchemaInfo(schema)
+		s.mockMetaCache.EXPECT().GetCollectionSchema(mock.Anything, mock.Anything, mock.Anything).Return(schemaInfo, nil)
+		s.ErrorContains(task.PreExecute(s.ctx), "partition key isolation does not support OR")
+	}
 }
 
 func TestMaterializedView(t *testing.T) {

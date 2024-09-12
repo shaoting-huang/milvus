@@ -19,6 +19,8 @@ package msgdispatcher
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -79,14 +81,12 @@ type Dispatcher struct {
 }
 
 func NewDispatcher(ctx context.Context,
-	factory msgstream.Factory,
-	isMain bool,
-	pchannel string,
-	position *Pos,
-	subName string,
-	subPos SubPos,
+	factory msgstream.Factory, isMain bool,
+	pchannel string, position *Pos,
+	subName string, subPos SubPos,
 	lagNotifyChan chan struct{},
 	lagTargets *typeutil.ConcurrentMap[string, *target],
+	includeCurrentMsg bool,
 ) (*Dispatcher, error) {
 	log := log.With(zap.String("pchannel", pchannel),
 		zap.String("subName", subName), zap.Bool("isMain", isMain))
@@ -104,7 +104,7 @@ func NewDispatcher(ctx context.Context,
 			return nil, err
 		}
 
-		err = stream.Seek(ctx, []*Pos{position}, false)
+		err = stream.Seek(ctx, []*Pos{position}, includeCurrentMsg)
 		if err != nil {
 			stream.Close()
 			log.Error("seek failed", zap.Error(err))
@@ -263,17 +263,28 @@ func (d *Dispatcher) groupingMsgs(pack *MsgPack) map[string]*MsgPack {
 	}
 	// group messages by vchannel
 	for _, msg := range pack.Msgs {
-		var vchannel string
+		var vchannel, collectionID string
 		switch msg.Type() {
 		case commonpb.MsgType_Insert:
 			vchannel = msg.(*msgstream.InsertMsg).GetShardName()
 		case commonpb.MsgType_Delete:
 			vchannel = msg.(*msgstream.DeleteMsg).GetShardName()
+		case commonpb.MsgType_CreateCollection:
+			collectionID = strconv.FormatInt(msg.(*msgstream.CreateCollectionMsg).GetCollectionID(), 10)
+		case commonpb.MsgType_DropCollection:
+			collectionID = strconv.FormatInt(msg.(*msgstream.DropCollectionMsg).GetCollectionID(), 10)
+		case commonpb.MsgType_CreatePartition:
+			collectionID = strconv.FormatInt(msg.(*msgstream.CreatePartitionMsg).GetCollectionID(), 10)
+		case commonpb.MsgType_DropPartition:
+			collectionID = strconv.FormatInt(msg.(*msgstream.DropPartitionMsg).GetCollectionID(), 10)
 		}
 		if vchannel == "" {
 			// for non-dml msg, such as CreateCollection, DropCollection, ...
-			// we need to dispatch it to all the vchannels.
+			// we need to dispatch it to the vchannel of this collection
 			for k := range targetPacks {
+				if !strings.Contains(k, collectionID) {
+					continue
+				}
 				// TODO: There's data race when non-dml msg is sent to different flow graph.
 				// Wrong open-trancing information is generated, Fix in future.
 				targetPacks[k].Msgs = append(targetPacks[k].Msgs, msg)

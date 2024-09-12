@@ -90,7 +90,7 @@ type Server struct {
 	store     metastore.QueryCoordCatalog
 	meta      *meta.Meta
 	dist      *meta.DistributionManager
-	targetMgr *meta.TargetManager
+	targetMgr meta.TargetManagerInterface
 	broker    meta.Broker
 
 	// Session
@@ -410,6 +410,7 @@ func (s *Server) initObserver() {
 		s.targetMgr,
 		s.targetObserver,
 		s.checkerController,
+		s.proxyClientManager,
 	)
 
 	s.replicaObserver = observers.NewReplicaObserver(

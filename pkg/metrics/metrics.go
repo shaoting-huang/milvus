@@ -110,12 +110,14 @@ const (
 	lockType                 = "lock_type"
 	lockOp                   = "lock_op"
 	loadTypeName             = "load_type"
+	pathLabelName            = "path"
 
 	// entities label
 	LoadedLabel         = "loaded"
 	NumEntitiesAllLabel = "all"
 
-	taskTypeLabel = "task_type"
+	taskTypeLabel  = "task_type"
+	taskStateLabel = "task_state"
 )
 
 var (

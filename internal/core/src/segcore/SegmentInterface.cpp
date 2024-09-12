@@ -56,10 +56,21 @@ SegmentInternalInterface::FillTargetEntry(const query::Plan* plan,
     AssertInfo(results.seg_offsets_.size() == size,
                "Size of result distances is not equal to size of ids");
 
+    std::unique_ptr<DataArray> field_data;
     // fill other entries except primary key by result_offset
     for (auto field_id : plan->target_entries_) {
-        auto field_data =
-            bulk_subscript(field_id, results.seg_offsets_.data(), size);
+        if (plan->schema_.get_dynamic_field_id().has_value() &&
+            plan->schema_.get_dynamic_field_id().value() == field_id &&
+            !plan->target_dynamic_fields_.empty()) {
+            auto& target_dynamic_fields = plan->target_dynamic_fields_;
+            field_data = std::move(bulk_subscript(field_id,
+                                                  results.seg_offsets_.data(),
+                                                  size,
+                                                  target_dynamic_fields));
+        } else {
+            field_data = std::move(
+                bulk_subscript(field_id, results.seg_offsets_.data(), size));
+        }
         results.output_fields_data_[field_id] = std::move(field_data);
     }
 }
@@ -87,7 +98,6 @@ SegmentInternalInterface::Retrieve(tracer::TraceContext* trace_ctx,
                                    bool ignore_non_pk) const {
     std::shared_lock lck(mutex_);
     tracer::AutoSpan span("Retrieve", trace_ctx, false);
-    check_retrieve(plan);
     auto results = std::make_unique<proto::segcore::RetrieveResults>();
     query::ExecPlanNodeVisitor visitor(*this, timestamp);
     auto retrieve_results = visitor.get_retrieve_result(*plan->plan_node_);
@@ -168,6 +178,16 @@ SegmentInternalInterface::FillTargetEntry(
             continue;
         }
 
+        if (plan->schema_.get_dynamic_field_id().has_value() &&
+            plan->schema_.get_dynamic_field_id().value() == field_id &&
+            !plan->target_dynamic_fields_.empty()) {
+            auto& target_dynamic_fields = plan->target_dynamic_fields_;
+            auto col =
+                bulk_subscript(field_id, offsets, size, target_dynamic_fields);
+            fields_data->AddAllocated(col.release());
+            continue;
+        }
+
         auto& field_meta = plan->schema_[field_id];
 
         auto col = bulk_subscript(field_id, offsets, size);
@@ -221,7 +241,6 @@ SegmentInternalInterface::Retrieve(tracer::TraceContext* trace_ctx,
                                    int64_t size) const {
     std::shared_lock lck(mutex_);
     tracer::AutoSpan span("RetrieveByOffsets", trace_ctx, false);
-    check_retrieve(Plan);
     auto results = std::make_unique<proto::segcore::RetrieveResults>();
     FillTargetEntry(trace_ctx, Plan, results, offsets, size, false, false);
     return results;
@@ -359,8 +378,10 @@ SegmentInternalInterface::LoadPrimitiveSkipIndex(milvus::FieldId field_id,
                                                  int64_t chunk_id,
                                                  milvus::DataType data_type,
                                                  const void* chunk_data,
+                                                 const bool* valid_data,
                                                  int64_t count) {
-    skip_index_.LoadPrimitive(field_id, chunk_id, data_type, chunk_data, count);
+    skip_index_.LoadPrimitive(
+        field_id, chunk_id, data_type, chunk_data, valid_data, count);
 }
 
 void
@@ -369,6 +390,15 @@ SegmentInternalInterface::LoadStringSkipIndex(
     int64_t chunk_id,
     const milvus::VariableColumn<std::string>& var_column) {
     skip_index_.LoadString(field_id, chunk_id, var_column);
+}
+
+index::TextMatchIndex*
+SegmentInternalInterface::GetTextIndex(FieldId field_id) const {
+    std::shared_lock lock(mutex_);
+    auto iter = text_indexes_.find(field_id);
+    AssertInfo(iter != text_indexes_.end(),
+               "failed to get text index, text index not found");
+    return iter->second.get();
 }
 
 }  // namespace milvus::segcore

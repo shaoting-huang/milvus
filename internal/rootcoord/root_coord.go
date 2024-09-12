@@ -50,6 +50,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/dependency"
 	"github.com/milvus-io/milvus/internal/util/proxyutil"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
+	"github.com/milvus-io/milvus/internal/util/streamingutil"
 	tsoutil2 "github.com/milvus-io/milvus/internal/util/tsoutil"
 	"github.com/milvus-io/milvus/pkg/common"
 	"github.com/milvus-io/milvus/pkg/kv"
@@ -655,7 +656,7 @@ func (c *Core) restore(ctx context.Context) error {
 				for _, part := range coll.Partitions {
 					switch part.State {
 					case pb.PartitionState_PartitionDropping:
-						go c.garbageCollector.ReDropPartition(coll.DBID, coll.PhysicalChannelNames, part.Clone(), ts)
+						go c.garbageCollector.ReDropPartition(coll.DBID, coll.PhysicalChannelNames, coll.VirtualChannelNames, part.Clone(), ts)
 					case pb.PartitionState_PartitionCreating:
 						go c.garbageCollector.RemoveCreatingPartition(coll.DBID, part.Clone(), ts)
 					default:
@@ -716,10 +717,13 @@ func (c *Core) startInternal() error {
 }
 
 func (c *Core) startServerLoop() {
-	c.wg.Add(3)
+	c.wg.Add(2)
 	go c.startTimeTickLoop()
 	go c.tsLoop()
-	go c.chanTimeTick.startWatch(&c.wg)
+	if !streamingutil.IsStreamingServiceEnabled() {
+		c.wg.Add(1)
+		go c.chanTimeTick.startWatch(&c.wg)
+	}
 }
 
 // Start starts RootCoord.
@@ -1120,6 +1124,7 @@ func convertModelToDesc(collInfo *model.Collection, aliases []string, dbName str
 		Description:        collInfo.Description,
 		AutoID:             collInfo.AutoID,
 		Fields:             model.MarshalFieldModels(collInfo.Fields),
+		Functions:          model.MarshalFunctionModels(collInfo.Functions),
 		EnableDynamicField: collInfo.EnableDynamicField,
 	}
 	resp.CollectionID = collInfo.CollectionID
@@ -1568,20 +1573,14 @@ func (c *Core) ShowSegments(ctx context.Context, in *milvuspb.ShowSegmentsReques
 	return &milvuspb.ShowSegmentsResponse{Status: merr.Success()}, nil
 }
 
-// GetVChannels returns all vchannels belonging to the pchannel.
-func (c *Core) GetVChannels(ctx context.Context, in *rootcoordpb.GetVChannelsRequest) (*rootcoordpb.GetVChannelsResponse, error) {
+// GetPChannelInfo get pchannel info.
+func (c *Core) GetPChannelInfo(ctx context.Context, in *rootcoordpb.GetPChannelInfoRequest) (*rootcoordpb.GetPChannelInfoResponse, error) {
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
-		return &rootcoordpb.GetVChannelsResponse{
+		return &rootcoordpb.GetPChannelInfoResponse{
 			Status: merr.Status(err),
 		}, nil
 	}
-
-	resp := &rootcoordpb.GetVChannelsResponse{
-		Status: merr.Success(),
-	}
-	vchannels := c.meta.GetVChannelsByPchannel(in.GetPchannel())
-	resp.Vchannels = vchannels
-	return resp, nil
+	return c.meta.GetPChannelInfo(in.GetPchannel()), nil
 }
 
 // AllocTimestamp alloc timestamp
@@ -2251,19 +2250,31 @@ func (c *Core) DropRole(ctx context.Context, in *milvuspb.DropRoleRequest) (*com
 		return merr.StatusWithErrorCode(errors.New(errMsg), commonpb.ErrorCode_DropRoleFailure), nil
 	}
 
-	grantEntities, err := c.meta.SelectGrant(util.DefaultTenant, &milvuspb.GrantEntity{
-		Role: &milvuspb.RoleEntity{Name: in.RoleName},
-	})
-	if len(grantEntities) != 0 {
-		errMsg := "fail to drop the role that it has privileges. Use REVOKE API to revoke privileges"
-		ctxLog.Warn(errMsg, zap.Error(err))
-		return merr.StatusWithErrorCode(errors.New(errMsg), commonpb.ErrorCode_DropRoleFailure), nil
+	if !in.ForceDrop {
+		grantEntities, err := c.meta.SelectGrant(util.DefaultTenant, &milvuspb.GrantEntity{
+			Role: &milvuspb.RoleEntity{Name: in.RoleName},
+		})
+		if len(grantEntities) != 0 {
+			errMsg := "fail to drop the role that it has privileges. Use REVOKE API to revoke privileges"
+			ctxLog.Warn(errMsg, zap.Any("grants", grantEntities), zap.Error(err))
+			return merr.StatusWithErrorCode(errors.New(errMsg), commonpb.ErrorCode_DropRoleFailure), nil
+		}
 	}
 	redoTask := newBaseRedoTask(c.stepExecutor)
 	redoTask.AddSyncStep(NewSimpleStep("drop role meta data", func(ctx context.Context) ([]nestedStep, error) {
 		err := c.meta.DropRole(util.DefaultTenant, in.RoleName)
 		if err != nil {
 			ctxLog.Warn("drop role mata data failed", zap.Error(err))
+		}
+		return nil, err
+	}))
+	redoTask.AddAsyncStep(NewSimpleStep("drop the privilege list of this role", func(ctx context.Context) ([]nestedStep, error) {
+		if !in.ForceDrop {
+			return nil, nil
+		}
+		err := c.meta.DropGrant(util.DefaultTenant, &milvuspb.RoleEntity{Name: in.RoleName})
+		if err != nil {
+			ctxLog.Warn("drop the privilege list failed for the role", zap.Error(err))
 		}
 		return nil, err
 	}))
@@ -2277,7 +2288,7 @@ func (c *Core) DropRole(ctx context.Context, in *milvuspb.DropRoleRequest) (*com
 		}
 		return nil, err
 	}))
-	err = redoTask.Execute(ctx)
+	err := redoTask.Execute(ctx)
 	if err != nil {
 		errMsg := "fail to execute task when dropping the role"
 		ctxLog.Warn(errMsg, zap.Error(err))
@@ -2514,7 +2525,7 @@ func (c *Core) isValidGrantor(entity *milvuspb.GrantorEntity, object string) err
 			return nil
 		}
 	}
-	return fmt.Errorf("not found the privilege name[%s]", entity.Privilege.Name)
+	return fmt.Errorf("not found the privilege name[%s] in object[%s]", entity.Privilege.Name, object)
 }
 
 // OperatePrivilege operate the privilege, including grant and revoke
@@ -2710,6 +2721,78 @@ func (c *Core) ListPolicy(ctx context.Context, in *internalpb.ListPolicyRequest)
 		PolicyInfos: policies,
 		UserRoles:   userRoles,
 	}, nil
+}
+
+func (c *Core) BackupRBAC(ctx context.Context, in *milvuspb.BackupRBACMetaRequest) (*milvuspb.BackupRBACMetaResponse, error) {
+	method := "BackupRBAC"
+	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
+	tr := timerecord.NewTimeRecorder(method)
+	ctxLog := log.Ctx(ctx).With(zap.String("role", typeutil.RootCoordRole), zap.Any("in", in))
+	ctxLog.Debug(method)
+
+	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
+		return &milvuspb.BackupRBACMetaResponse{
+			Status: merr.Status(err),
+		}, nil
+	}
+
+	rbacMeta, err := c.meta.BackupRBAC(ctx, util.DefaultTenant)
+	if err != nil {
+		return &milvuspb.BackupRBACMetaResponse{
+			Status: merr.Status(err),
+		}, nil
+	}
+
+	ctxLog.Debug(method + " success")
+	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
+	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+
+	return &milvuspb.BackupRBACMetaResponse{
+		Status:   merr.Success(),
+		RBACMeta: rbacMeta,
+	}, nil
+}
+
+func (c *Core) RestoreRBAC(ctx context.Context, in *milvuspb.RestoreRBACMetaRequest) (*commonpb.Status, error) {
+	method := "RestoreRBAC"
+	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
+	tr := timerecord.NewTimeRecorder(method)
+	ctxLog := log.Ctx(ctx).With(zap.String("role", typeutil.RootCoordRole))
+	ctxLog.Debug(method)
+
+	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
+		return merr.Status(err), nil
+	}
+
+	redoTask := newBaseRedoTask(c.stepExecutor)
+	redoTask.AddSyncStep(NewSimpleStep("restore rbac meta data", func(ctx context.Context) ([]nestedStep, error) {
+		if err := c.meta.RestoreRBAC(ctx, util.DefaultTenant, in.RBACMeta); err != nil {
+			log.Warn("fail to restore rbac meta data", zap.Any("in", in), zap.Error(err))
+			return nil, err
+		}
+		return nil, nil
+	}))
+	redoTask.AddAsyncStep(NewSimpleStep("operate privilege cache", func(ctx context.Context) ([]nestedStep, error) {
+		if err := c.proxyClientManager.RefreshPolicyInfoCache(c.ctx, &proxypb.RefreshPolicyInfoCacheRequest{
+			OpType: int32(typeutil.CacheRefresh),
+		}); err != nil {
+			log.Warn("fail to refresh policy info cache", zap.Any("in", in), zap.Error(err))
+			return nil, err
+		}
+		return nil, nil
+	}))
+
+	err := redoTask.Execute(ctx)
+	if err != nil {
+		errMsg := "fail to execute task when restore rbac meta data"
+		log.Warn(errMsg, zap.Error(err))
+		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_OperatePrivilegeFailure), nil
+	}
+
+	ctxLog.Debug(method + " success")
+	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
+	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	return merr.Success(), nil
 }
 
 func (c *Core) RenameCollection(ctx context.Context, req *milvuspb.RenameCollectionRequest) (*commonpb.Status, error) {

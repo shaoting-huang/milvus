@@ -53,7 +53,10 @@ namespace milvus {
 */
 constexpr size_t STRING_PADDING = 1;
 constexpr size_t ARRAY_PADDING = 1;
-constexpr size_t BLOCK_SIZE = 8192;
+
+constexpr size_t DEFAULT_PK_VRCOL_BLOCK_SIZE = 1;
+constexpr size_t DEFAULT_MEM_VRCOL_BLOCK_SIZE = 32;
+constexpr size_t DEFAULT_MMAP_VRCOL_BLOCK_SIZE = 256;
 
 class ColumnBase {
  public:
@@ -69,6 +72,10 @@ class ColumnBase {
         SetPaddingSize(data_type);
 
         if (IsVariableDataType(data_type)) {
+            if (field_meta.is_nullable()) {
+                nullable_ = true;
+                valid_data_.reserve(reserve);
+            }
             return;
         }
 
@@ -128,6 +135,7 @@ class ColumnBase {
 
     // mmap mode ctor
     // User must call Seal to build the view for variable length column.
+    // !!! The incoming file must be write padings at the end of the file.
     ColumnBase(const File& file, size_t size, const FieldMeta& field_meta)
         : mapping_type_(MappingType::MAP_WITH_FILE) {
         auto data_type = field_meta.get_data_type();
@@ -136,18 +144,21 @@ class ColumnBase {
             type_size_ = field_meta.get_sizeof();
             num_rows_ = size / type_size_;
         }
+        AssertInfo(size >= padding_,
+                   "file size {} is less than padding size {}",
+                   size,
+                   padding_);
 
         data_size_ = size;
-        data_cap_size_ = size;
+        data_cap_size_ = size - padding_;
         // use exactly same size of file, padding shall be written in file already
         // see also https://github.com/milvus-io/milvus/issues/34442
-        size_t mapped_size = data_cap_size_;
-        data_ = static_cast<char*>(mmap(
-            nullptr, mapped_size, PROT_READ, MAP_SHARED, file.Descriptor(), 0));
+        data_ = static_cast<char*>(
+            mmap(nullptr, size, PROT_READ, MAP_SHARED, file.Descriptor(), 0));
         AssertInfo(data_ != MAP_FAILED,
                    "failed to create file-backed map, err: {}",
                    strerror(errno));
-        madvise(data_, mapped_size, MADV_WILLNEED);
+        madvise(data_, size, MADV_WILLNEED);
 
         // valid_data store in memory
         if (field_meta.is_nullable()) {
@@ -155,31 +166,37 @@ class ColumnBase {
             valid_data_.reserve(num_rows_);
         }
 
-        UpdateMetricWhenMmap(mapped_size);
+        UpdateMetricWhenMmap(size);
     }
 
     // mmap mode ctor
     // User must call Seal to build the view for variable length column.
+    // !!! The incoming file must be write padings at the end of the file.
     ColumnBase(const File& file,
                size_t size,
                int dim,
                const DataType& data_type,
                bool nullable)
         : data_size_(size),
-          data_cap_size_(size),
           nullable_(nullable),
           mapping_type_(MappingType::MAP_WITH_FILE) {
         SetPaddingSize(data_type);
 
         // use exact same size of file, padding shall be written in file already
         // see also https://github.com/milvus-io/milvus/issues/34442
-        size_t mapped_size = data_cap_size_;
         if (!IsVariableDataType(data_type)) {
             type_size_ = GetDataTypeSize(data_type, dim);
             num_rows_ = size / type_size_;
         }
-        data_ = static_cast<char*>(mmap(
-            nullptr, mapped_size, PROT_READ, MAP_SHARED, file.Descriptor(), 0));
+        AssertInfo(size >= padding_,
+                   "file size {} is less than padding size {}",
+                   size,
+                   padding_);
+
+        data_cap_size_ = size - padding_;
+
+        data_ = static_cast<char*>(
+            mmap(nullptr, size, PROT_READ, MAP_SHARED, file.Descriptor(), 0));
         AssertInfo(data_ != MAP_FAILED,
                    "failed to create file-backed map, err: {}",
                    strerror(errno));
@@ -188,7 +205,7 @@ class ColumnBase {
             valid_data_.reserve(num_rows_);
         }
 
-        UpdateMetricWhenMmap(mapped_size);
+        UpdateMetricWhenMmap(size);
     }
 
     virtual ~ColumnBase() {
@@ -211,7 +228,7 @@ class ColumnBase {
     ColumnBase(ColumnBase&& column) noexcept
         : data_(column.data_),
           nullable_(column.nullable_),
-          valid_data_(column.valid_data_),
+          valid_data_(std::move(column.valid_data_)),
           padding_(column.padding_),
           type_size_(column.type_size_),
           num_rows_(column.num_rows_),
@@ -238,7 +255,10 @@ class ColumnBase {
 
     bool
     IsValid(size_t offset) const {
-        return valid_data_[offset];
+        if (nullable_) {
+            return valid_data_[offset];
+        }
+        return true;
     }
 
     bool
@@ -279,7 +299,7 @@ class ColumnBase {
                   "GetBatchBuffer only supported for VariableColumn");
     }
 
-    virtual std::vector<std::string_view>
+    virtual std::pair<std::vector<std::string_view>, FixedVector<bool>>
     StringViews() const {
         PanicInfo(ErrorCode::Unsupported,
                   "StringViews only supported for VariableColumn");
@@ -341,22 +361,7 @@ class ColumnBase {
 
     void
     SetPaddingSize(const DataType& type) {
-        switch (type) {
-            case DataType::JSON:
-                // simdjson requires a padding following the json data
-                padding_ = simdjson::SIMDJSON_PADDING;
-                break;
-            case DataType::VARCHAR:
-            case DataType::STRING:
-                padding_ = STRING_PADDING;
-                break;
-            case DataType::ARRAY:
-                padding_ = ARRAY_PADDING;
-                break;
-            default:
-                padding_ = 0;
-                break;
-        }
+        padding_ = PaddingSize(type);
     }
 
     void
@@ -516,7 +521,8 @@ class Column : public ColumnBase {
 
     SpanBase
     Span() const override {
-        return SpanBase(data_, num_rows_, data_cap_size_ / num_rows_);
+        return SpanBase(
+            data_, valid_data_.data(), num_rows_, data_cap_size_ / num_rows_);
     }
 };
 
@@ -643,13 +649,16 @@ class VariableColumn : public ColumnBase {
         std::conditional_t<std::is_same_v<T, std::string>, std::string_view, T>;
 
     // memory mode ctor
-    VariableColumn(size_t cap, const FieldMeta& field_meta)
-        : ColumnBase(cap, field_meta) {
+    VariableColumn(size_t cap, const FieldMeta& field_meta, size_t block_size)
+        : ColumnBase(cap, field_meta), block_size_(block_size) {
     }
 
     // mmap mode ctor
-    VariableColumn(const File& file, size_t size, const FieldMeta& field_meta)
-        : ColumnBase(file, size, field_meta) {
+    VariableColumn(const File& file,
+                   size_t size,
+                   const FieldMeta& field_meta,
+                   size_t block_size)
+        : ColumnBase(file, size, field_meta), block_size_(block_size) {
     }
     // mmap with mmap manager
     VariableColumn(size_t reserve,
@@ -657,8 +666,10 @@ class VariableColumn : public ColumnBase {
                    const DataType& data_type,
                    storage::MmapChunkManagerPtr mcm,
                    storage::MmapChunkDescriptorPtr descriptor,
-                   bool nullable)
-        : ColumnBase(reserve, dim, data_type, mcm, descriptor, nullable) {
+                   bool nullable,
+                   size_t block_size)
+        : ColumnBase(reserve, dim, data_type, mcm, descriptor, nullable),
+          block_size_(block_size) {
     }
 
     VariableColumn(VariableColumn&& column) noexcept
@@ -673,7 +684,7 @@ class VariableColumn : public ColumnBase {
                   "span() interface is not implemented for variable column");
     }
 
-    std::vector<std::string_view>
+    std::pair<std::vector<std::string_view>, FixedVector<bool>>
     StringViews() const override {
         std::vector<std::string_view> res;
         char* pos = data_;
@@ -684,7 +695,7 @@ class VariableColumn : public ColumnBase {
             res.emplace_back(std::string_view(pos, size));
             pos += size;
         }
-        return res;
+        return std::make_pair(res, valid_data_);
     }
 
     [[nodiscard]] std::vector<ViewType>
@@ -708,8 +719,8 @@ class VariableColumn : public ColumnBase {
             PanicInfo(ErrorCode::OutOfRange, "index out of range");
         }
 
-        char* pos = data_ + indices_[start_offset / BLOCK_SIZE];
-        for (size_t j = 0; j < start_offset % BLOCK_SIZE; j++) {
+        char* pos = data_ + indices_[start_offset / block_size_];
+        for (size_t j = 0; j < start_offset % block_size_; j++) {
             uint32_t size;
             size = *reinterpret_cast<uint32_t*>(pos);
             pos += sizeof(uint32_t) + size;
@@ -723,8 +734,8 @@ class VariableColumn : public ColumnBase {
         if (i < 0 || i > num_rows_) {
             PanicInfo(ErrorCode::OutOfRange, "index out of range");
         }
-        size_t batch_id = i / BLOCK_SIZE;
-        size_t offset = i % BLOCK_SIZE;
+        size_t batch_id = i / block_size_;
+        size_t offset = i % block_size_;
 
         // located in batch start location
         char* pos = data_ + indices_[batch_id];
@@ -801,11 +812,11 @@ class VariableColumn : public ColumnBase {
     void
     shrink_indice() {
         std::vector<uint64_t> tmp_indices;
-        tmp_indices.reserve((indices_.size() + BLOCK_SIZE - 1) / BLOCK_SIZE);
+        tmp_indices.reserve((indices_.size() + block_size_ - 1) / block_size_);
 
         for (size_t i = 0; i < indices_.size();) {
             tmp_indices.push_back(indices_[i]);
-            i += BLOCK_SIZE;
+            i += block_size_;
         }
 
         indices_.swap(tmp_indices);
@@ -814,8 +825,8 @@ class VariableColumn : public ColumnBase {
  private:
     // loading states
     std::queue<FieldDataPtr> load_buf_{};
-    // raw data index, record indices located 0, interval, 2 * interval, 3 * interval
-    // ... just like page index, interval set to 8192 that matches search engine's batch size
+    // raw data index, record indices located 0, block_size_, 2 * block_size_, 3 * block_size_
+    size_t block_size_;
     std::vector<uint64_t> indices_{};
 };
 
@@ -853,7 +864,10 @@ class ArrayColumn : public ColumnBase {
 
     SpanBase
     Span() const override {
-        return SpanBase(views_.data(), views_.size(), sizeof(ArrayView));
+        return SpanBase(views_.data(),
+                        valid_data_.data(),
+                        views_.size(),
+                        sizeof(ArrayView));
     }
 
     [[nodiscard]] const std::vector<ArrayView>&
@@ -877,8 +891,8 @@ class ArrayColumn : public ColumnBase {
         element_indices_.emplace_back(array.get_offsets());
         if (nullable_) {
             return ColumnBase::Append(static_cast<const char*>(array.data()),
-                                      array.byte_size(),
-                                      valid_data);
+                                      valid_data,
+                                      array.byte_size());
         }
         ColumnBase::Append(static_cast<const char*>(array.data()),
                            array.byte_size());

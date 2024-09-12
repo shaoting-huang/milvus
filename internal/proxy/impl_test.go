@@ -29,6 +29,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
@@ -248,6 +249,8 @@ func TestProxy_ResourceGroup(t *testing.T) {
 
 	qc := mocks.NewMockQueryCoordClient(t)
 	node.SetQueryCoordClient(qc)
+
+	qc.EXPECT().ShowCollections(mock.Anything, mock.Anything).Return(&querypb.ShowCollectionsResponse{}, nil).Maybe()
 
 	tsoAllocatorIns := newMockTsoAllocator()
 	node.sched, err = newTaskScheduler(node.ctx, tsoAllocatorIns, node.factory)
@@ -1374,6 +1377,21 @@ func TestProxy_ReplicateMessage(t *testing.T) {
 	})
 
 	t.Run("get latest position", func(t *testing.T) {
+		base64DecodeMsgPosition := func(position string) (*msgstream.MsgPosition, error) {
+			decodeBytes, err := base64.StdEncoding.DecodeString(position)
+			if err != nil {
+				log.Warn("fail to decode the position", zap.Error(err))
+				return nil, err
+			}
+			msgPosition := &msgstream.MsgPosition{}
+			err = proto.Unmarshal(decodeBytes, msgPosition)
+			if err != nil {
+				log.Warn("fail to unmarshal the position", zap.Error(err))
+				return nil, err
+			}
+			return msgPosition, nil
+		}
+
 		paramtable.Get().Save(paramtable.Get().CommonCfg.TTMsgEnabled.Key, "false")
 		defer paramtable.Get().Save(paramtable.Get().CommonCfg.TTMsgEnabled.Key, "true")
 
@@ -1395,7 +1413,11 @@ func TestProxy_ReplicateMessage(t *testing.T) {
 		})
 		assert.NoError(t, err)
 		assert.EqualValues(t, 0, resp.GetStatus().GetCode())
-		assert.Equal(t, base64.StdEncoding.EncodeToString([]byte("mock")), resp.GetPosition())
+		{
+			p, err := base64DecodeMsgPosition(resp.GetPosition())
+			assert.NoError(t, err)
+			assert.Equal(t, []byte("mock"), p.MsgID)
+		}
 
 		factory.EXPECT().NewMsgStream(mock.Anything).Return(nil, errors.New("mock")).Once()
 		resp, err = node.ReplicateMessage(context.TODO(), &milvuspb.ReplicateMessageRequest{
@@ -1421,14 +1443,13 @@ func TestProxy_ReplicateMessage(t *testing.T) {
 		}
 
 		{
-			timeTickResult := msgpb.TimeTickMsg{}
 			timeTickMsg := &msgstream.TimeTickMsg{
 				BaseMsg: msgstream.BaseMsg{
 					BeginTimestamp: 1,
 					EndTimestamp:   10,
 					HashValues:     []uint32{0},
 				},
-				TimeTickMsg: timeTickResult,
+				TimeTickMsg: &msgpb.TimeTickMsg{},
 			}
 			msgBytes, _ := timeTickMsg.Marshal(timeTickMsg)
 			resp, err := node.ReplicateMessage(context.TODO(), &milvuspb.ReplicateMessageRequest{
@@ -1441,20 +1462,19 @@ func TestProxy_ReplicateMessage(t *testing.T) {
 		}
 
 		{
-			timeTickResult := msgpb.TimeTickMsg{
-				Base: commonpbutil.NewMsgBase(
-					commonpbutil.WithMsgType(commonpb.MsgType(-1)),
-					commonpbutil.WithTimeStamp(10),
-					commonpbutil.WithSourceID(-1),
-				),
-			}
 			timeTickMsg := &msgstream.TimeTickMsg{
 				BaseMsg: msgstream.BaseMsg{
 					BeginTimestamp: 1,
 					EndTimestamp:   10,
 					HashValues:     []uint32{0},
 				},
-				TimeTickMsg: timeTickResult,
+				TimeTickMsg: &msgpb.TimeTickMsg{
+					Base: commonpbutil.NewMsgBase(
+						commonpbutil.WithMsgType(commonpb.MsgType(-1)),
+						commonpbutil.WithTimeStamp(10),
+						commonpbutil.WithSourceID(-1),
+					),
+				},
 			}
 			msgBytes, _ := timeTickMsg.Marshal(timeTickMsg)
 			resp, err := node.ReplicateMessage(context.TODO(), &milvuspb.ReplicateMessageRequest{
@@ -1512,7 +1532,7 @@ func TestProxy_ReplicateMessage(t *testing.T) {
 					MsgID:       []byte("mock message id 2"),
 				},
 			},
-			InsertRequest: msgpb.InsertRequest{
+			InsertRequest: &msgpb.InsertRequest{
 				Base: &commonpb.MsgBase{
 					MsgType:   commonpb.MsgType_Insert,
 					MsgID:     10001,
