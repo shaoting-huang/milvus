@@ -311,20 +311,27 @@ func PrivilegeNameForAPI(name string) string {
 	return MetaStore2API(name)
 }
 
-func PrivilegeNameForMetastore(name string) string {
+// return privilege name for meta-store and a bool value to indicate if it is a customized group
+func PrivilegeNameForMetastore(name string, customizedGroup []string) (string, bool) {
 	// check if name is single privilege
 	dbPrivilege := PrivilegeWord + name
-	_, ok := commonpb.ObjectPrivilege_value[dbPrivilege]
-	if !ok {
-		// check if name is privilege group
-		dbPrivilege := PrivilegeGroupWord + name
-		_, ok := commonpb.ObjectPrivilege_value[dbPrivilege]
-		if !ok {
-			return ""
-		}
-		return dbPrivilege
+	if _, exists := commonpb.ObjectPrivilege_value[dbPrivilege]; exists {
+		return dbPrivilege, false
 	}
-	return dbPrivilege
+
+	// check if name is privilege group
+	dbPrivilege = PrivilegeGroupWord + name
+	if _, exists := commonpb.ObjectPrivilege_value[dbPrivilege]; exists {
+		return dbPrivilege, false
+	}
+
+	// Check if name is a custom privilege group
+	for _, group := range customizedGroup {
+		if group == name {
+			return dbPrivilege, true
+		}
+	}
+	return "", false
 }
 
 func IsAnyWord(word string) bool {

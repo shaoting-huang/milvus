@@ -1,6 +1,7 @@
 package funcutil
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -108,6 +109,15 @@ func GetObjectNames(m interface{}, index int32) []string {
 		res[i] = names.Get(i).String()
 	}
 	return res
+}
+
+func PolicyForPrivilegeGroup(roleName string, objectType string, objectName string, privileges []*milvuspb.PrivilegeEntity, dbName string) string {
+	var policies []string
+	for _, privilege := range privileges {
+		policies = append(policies, PolicyForPrivilege(roleName, objectType, objectName, privilege.Name, dbName))
+	}
+	jsonString, _ := json.Marshal(policies)
+	return string(jsonString)
 }
 
 func PolicyForPrivilege(roleName string, objectType string, objectName string, privilege string, dbName string) string {

@@ -5313,7 +5313,8 @@ func (node *Proxy) OperatePrivilege(ctx context.Context, req *milvuspb.OperatePr
 		log.Warn("fail to operate privilege", zap.Error(err))
 		return merr.Status(err), nil
 	}
-	relatedPrivileges := util.RelatedPrivileges[util.PrivilegeNameForMetastore(req.Entity.Grantor.Privilege.Name)]
+	dbPrivilegeName, _ := util.PrivilegeNameForMetastore(req.Entity.Grantor.Privilege.Name, make([]string, 0))
+	relatedPrivileges := util.RelatedPrivileges[dbPrivilegeName]
 	if len(relatedPrivileges) != 0 {
 		for _, relatedPrivilege := range relatedPrivileges {
 			relatedReq := proto.Clone(req).(*milvuspb.OperatePrivilegeRequest)
@@ -6487,4 +6488,128 @@ func (node *Proxy) RegisterRestRouter(router gin.IRouter) {
 	router.GET(http.QcoordSegmentsPath, getQueryComponentMetrics(node, metricsinfo.QuerySegmentDist))
 	router.GET(http.QcoordChannelsPath, getQueryComponentMetrics(node, metricsinfo.QueryChannelDist))
 	router.GET(http.QcoordTasksPath, getQueryComponentMetrics(node, metricsinfo.QueryTasks))
+}
+
+func (node *Proxy) CreatePrivilegeGroup(ctx context.Context, req *milvuspb.CreatePrivilegeGroupRequest) (*commonpb.Status, error) {
+	ctx, sp := otel.Tracer(typeutil.ProxyRole).Start(ctx, "Proxy-CreatePrivilegeGroup")
+	defer sp.End()
+
+	log := log.Ctx(ctx)
+
+	log.Info("CreatePrivilegeGroup", zap.Any("req", req))
+	if err := merr.CheckHealthy(node.GetStateCode()); err != nil {
+		return merr.Status(err), nil
+	}
+	if err := ValidatePrivilegeGroupName(req.GroupName); err != nil {
+		return merr.Status(err), nil
+	}
+	if req.Base == nil {
+		req.Base = &commonpb.MsgBase{}
+	}
+	req.Base.MsgType = commonpb.MsgType_CreatePrivilegeGroup
+
+	result, err := node.rootCoord.CreatePrivilegeGroup(ctx, req)
+	if err != nil {
+		log.Warn("fail to create privilege group", zap.Error(err))
+		return merr.Status(err), nil
+	}
+	if merr.Ok(result) {
+		SendReplicateMessagePack(ctx, node.replicateMsgStream, req)
+	}
+	return result, nil
+}
+
+func (node *Proxy) DropPrivilegeGroup(ctx context.Context, req *milvuspb.DropPrivilegeGroupRequest) (*commonpb.Status, error) {
+	ctx, sp := otel.Tracer(typeutil.ProxyRole).Start(ctx, "Proxy-DropPrivilegeGroup")
+	defer sp.End()
+
+	log := log.Ctx(ctx)
+
+	log.Info("DropPrivilegeGroup", zap.Any("req", req))
+	if err := merr.CheckHealthy(node.GetStateCode()); err != nil {
+		return merr.Status(err), nil
+	}
+	if err := ValidatePrivilegeGroupName(req.GroupName); err != nil {
+		return merr.Status(err), nil
+	}
+	if req.Base == nil {
+		req.Base = &commonpb.MsgBase{}
+	}
+	req.Base.MsgType = commonpb.MsgType_DropPrivilegeGroup
+
+	result, err := node.rootCoord.DropPrivilegeGroup(ctx, req)
+	if err != nil {
+		log.Warn("fail to drop privilege group", zap.Error(err))
+		return merr.Status(err), nil
+	}
+	if merr.Ok(result) {
+		SendReplicateMessagePack(ctx, node.replicateMsgStream, req)
+	}
+	return result, nil
+}
+
+func (node *Proxy) ListPrivilegeGroups(ctx context.Context, req *milvuspb.ListPrivilegeGroupsRequest) (*milvuspb.ListPrivilegeGroupsResponse, error) {
+	ctx, sp := otel.Tracer(typeutil.ProxyRole).Start(ctx, "Proxy-ListPrivilegeGroups")
+	defer sp.End()
+
+	log := log.Ctx(ctx).With(
+		zap.String("role", typeutil.ProxyRole))
+
+	log.Debug("ListPrivilegeGroups")
+	if err := merr.CheckHealthy(node.GetStateCode()); err != nil {
+		return &milvuspb.ListPrivilegeGroupsResponse{Status: merr.Status(err)}, nil
+	}
+	if req.Base == nil {
+		req.Base = &commonpb.MsgBase{}
+	}
+	req.Base.MsgType = commonpb.MsgType_ListCredUsernames
+	rootCoordReq := &milvuspb.ListPrivilegeGroupsRequest{
+		Base: commonpbutil.NewMsgBase(
+			commonpbutil.WithMsgType(commonpb.MsgType_ListCredUsernames),
+		),
+	}
+	resp, err := node.rootCoord.ListPrivilegeGroups(ctx, rootCoordReq)
+	if err != nil {
+		return &milvuspb.ListPrivilegeGroupsResponse{
+			Status: merr.Status(err),
+		}, nil
+	}
+	return &milvuspb.ListPrivilegeGroupsResponse{
+		Status: merr.Success(),
+		Groups: resp.Groups,
+	}, nil
+}
+
+func (node *Proxy) OperatePrivilegeGroup(ctx context.Context, req *milvuspb.OperatePrivilegeGroupRequest) (*commonpb.Status, error) {
+	ctx, sp := otel.Tracer(typeutil.ProxyRole).Start(ctx, "Proxy-OperatePrivilegeGroup")
+	defer sp.End()
+
+	log := log.Ctx(ctx)
+
+	log.Info("OperatePrivilegeGroup", zap.Any("req", req))
+	if err := merr.CheckHealthy(node.GetStateCode()); err != nil {
+		return merr.Status(err), nil
+	}
+	if err := ValidatePrivilegeGroupName(req.GroupName); err != nil {
+		return merr.Status(err), nil
+	}
+	for _, priv := range req.GetPrivileges() {
+		if err := ValidatePrivilegeGroup(priv.Name); err != nil {
+			return merr.Status(err), nil
+		}
+	}
+	if req.Base == nil {
+		req.Base = &commonpb.MsgBase{}
+	}
+	req.Base.MsgType = commonpb.MsgType_OperatePrivilegeGroup
+
+	result, err := node.rootCoord.OperatePrivilegeGroup(ctx, req)
+	if err != nil {
+		log.Warn("fail to add privileges to privilege group", zap.Error(err))
+		return merr.Status(err), nil
+	}
+	if merr.Ok(result) {
+		SendReplicateMessagePack(ctx, node.replicateMsgStream, req)
+	}
+	return result, nil
 }

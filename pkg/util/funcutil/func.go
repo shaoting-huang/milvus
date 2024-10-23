@@ -511,3 +511,38 @@ func DecodeUserRoleCache(cache string) (string, string, error) {
 	role := cache[index+1:]
 	return user, role, nil
 }
+
+func EncodePrivilegeGroupCache(groupName string, privileges []*milvuspb.PrivilegeEntity) string {
+	var res string
+	for _, privilege := range privileges {
+		res += fmt.Sprintf("%s,", privilege.Name)
+	}
+
+	if len(res) > 0 {
+		res = res[:len(res)-1]
+	}
+
+	return fmt.Sprintf("%s/%s", groupName, res)
+}
+
+func DecodePrivilegeGroupCache(encoded string) (string, []*milvuspb.PrivilegeEntity, error) {
+	parts := strings.Split(encoded, "/")
+	if len(parts) != 2 {
+		return "", nil, fmt.Errorf("invalid encoded format")
+	}
+
+	groupName := parts[0]
+
+	privilegesStr := parts[1]
+	if privilegesStr == "" {
+		return groupName, []*milvuspb.PrivilegeEntity{}, nil
+	}
+
+	privilegeNames := strings.Split(privilegesStr, ",")
+	var privileges []*milvuspb.PrivilegeEntity
+	for _, name := range privilegeNames {
+		privileges = append(privileges, &milvuspb.PrivilegeEntity{Name: name})
+	}
+
+	return groupName, privileges, nil
+}

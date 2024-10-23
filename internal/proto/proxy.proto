@@ -63,6 +63,7 @@ message RefreshPolicyInfoCacheRequest {
   common.MsgBase base = 1;
   int32 opType = 2;
   string opKey = 3;
+  repeated string opParams = 4;
 }
 
 // Deprecated: use ClusterLimiter instead it
