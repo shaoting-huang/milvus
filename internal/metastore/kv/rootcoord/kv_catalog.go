@@ -1394,11 +1394,8 @@ func (kc *Catalog) RestoreRBAC(ctx context.Context, tenant string, meta *milvusp
 
 	// restore grant
 	for _, grant := range meta.Grants {
-		customGroups, err := kc.ListPrivilegeGroups(ctx)
-		if err != nil {
-			return err
-		}
-		grant.Grantor.Privilege.Name, _ = util.PrivilegeNameForMetastore(grant.Grantor.Privilege.Name, customGroups)
+		dbPrivilegeName, _ := util.PrivilegeNameForMetastore(grant.Grantor.Privilege.Name, make([]string, 0))
+		grant.Grantor.Privilege.Name = dbPrivilegeName
 		err = kc.AlterGrant(ctx, tenant, grant, milvuspb.OperatePrivilegeType_Grant)
 		if err != nil {
 			return err
@@ -1477,25 +1474,59 @@ func (kc *Catalog) DropPrivilegeGroup(ctx context.Context, groupName string) err
 	return nil
 }
 
-func (kc *Catalog) AlterPrivilegeGroup(ctx context.Context, groupName string, privileges []*milvuspb.PrivilegeEntity) error {
-	var privilegeNames []string
-	for _, privilege := range privileges {
-		privilegeNames = append(privilegeNames, privilege.Name)
-	}
-
-	privilegeData, err := json.Marshal(privilegeNames)
+func (kc *Catalog) AlterPrivilegeGroup(ctx context.Context, groupName string, privileges []*milvuspb.PrivilegeEntity, operateType milvuspb.OperatePrivilegeGroupType) error {
+	k := BuildPrivilegeGroupkey(groupName)
+	existingPrivilegeData, err := kc.Txn.Load(k)
+	fmt.Println(existingPrivilegeData)
 	if err != nil {
-		log.Error("failed to marshal privileges", zap.String("group", groupName), zap.Error(err))
+		log.Error("failed to retrieve existing privileges", zap.String("group", groupName), zap.Error(err))
 		return err
 	}
-	k := BuildPrivilegeGroupkey(groupName)
-	hasKey, err := kc.Txn.Has(k)
-	if hasKey {
-		err = kc.Txn.Remove(k)
-	}
-	err = kc.Txn.Save(k, string(privilegeData))
+
+	_, existingPrivileges, err := funcutil.DecodePrivilegeGroupCache(string(existingPrivilegeData))
 	if err != nil {
-		log.Warn("fail to put privilege group", zap.String("key", k), zap.Error(err))
+		log.Error("failed to decode existing privileges", zap.String("group", groupName), zap.Error(err))
+		return err
+	}
+
+	existingPrivilegesMap := make(map[string]struct{}, len(existingPrivileges))
+	for _, p := range existingPrivileges {
+		existingPrivilegesMap[p.Name] = struct{}{}
+	}
+
+	switch operateType {
+	case milvuspb.OperatePrivilegeGroupType_AddPrivilegesToGroup:
+		// Add new privileges without duplicates
+		for _, p := range privileges {
+			if _, exists := existingPrivilegesMap[p.Name]; !exists {
+				existingPrivileges = append(existingPrivileges, p)
+			}
+		}
+
+	case milvuspb.OperatePrivilegeGroupType_RemovePrivilegesFromGroup:
+		// Remove specified privileges
+		toRemove := make(map[string]struct{}, len(privileges))
+		for _, p := range privileges {
+			toRemove[p.Name] = struct{}{}
+		}
+		var updatedPrivileges []*milvuspb.PrivilegeEntity
+		for _, p := range existingPrivileges {
+			if _, remove := toRemove[p.Name]; !remove {
+				updatedPrivileges = append(updatedPrivileges, p)
+			}
+		}
+		existingPrivileges = updatedPrivileges
+
+	default:
+		return fmt.Errorf("invalid operate privilege group type: %s", operateType.String())
+	}
+
+	// Encode updated privileges
+	encodedPrivilegeData := funcutil.EncodePrivilegeGroupCache(groupName, existingPrivileges)
+
+	// Update metadata
+	if err := kc.Txn.Save(k, encodedPrivilegeData); err != nil {
+		log.Error("failed to update privilege group", zap.String("group", groupName), zap.Error(err))
 		return err
 	}
 	return nil
@@ -1504,21 +1535,16 @@ func (kc *Catalog) AlterPrivilegeGroup(ctx context.Context, groupName string, pr
 func (kc *Catalog) ListPrivilegeGroups(ctx context.Context) ([]string, error) {
 	var privilegeGroups []string
 
-	keys, _, err := kc.Txn.LoadWithPrefix(PrivilegeGroupPrefix)
+	_, values, err := kc.Txn.LoadWithPrefix(PrivilegeGroupPrefix)
 	if err != nil {
 		log.Error("failed to list privilege groups", zap.String("prefix", PrivilegeGroupPrefix), zap.Error(err))
 		return nil, err
 	}
 
-	for _, key := range keys {
-		groupName := typeutil.AfterN(key, PrivilegeGroupPrefix+"/", "/")
-		if len(groupName) != 1 {
-			log.Warn("invalid privilege group key", zap.String("string", key), zap.String("sub_string", PrivilegeGroupPrefix))
-			continue
-		}
-
-		privilegeGroups = append(privilegeGroups, groupName[0])
+	for _, value := range values {
+		privilegeGroups = append(privilegeGroups, string(value))
 	}
+
 	return privilegeGroups, nil
 }
 

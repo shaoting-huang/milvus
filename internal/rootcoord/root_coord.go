@@ -2723,14 +2723,23 @@ func (c *Core) ListPolicy(ctx context.Context, in *internalpb.ListPolicyRequest)
 			Status: merr.StatusWithErrorCode(errors.New(errMsg), commonpb.ErrorCode_ListPolicyFailure),
 		}, nil
 	}
+	privilegeGroups, err := c.meta.ListPrivilegeGroups(ctx)
+	if err != nil {
+		errMsg := "fail to list privilege groups"
+		ctxLog.Warn(errMsg, zap.Error(err))
+		return &internalpb.ListPolicyResponse{
+			Status: merr.StatusWithErrorCode(errors.New(errMsg), commonpb.ErrorCode_ListPolicyFailure),
+		}, nil
+	}
 
 	ctxLog.Debug(method + " success")
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return &internalpb.ListPolicyResponse{
-		Status:      merr.Success(),
-		PolicyInfos: policies,
-		UserRoles:   userRoles,
+		Status:          merr.Success(),
+		PolicyInfos:     policies,
+		UserRoles:       userRoles,
+		PrivilegeGroups: privilegeGroups,
 	}, nil
 }
 

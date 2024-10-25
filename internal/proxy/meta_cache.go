@@ -85,7 +85,7 @@ type Cache interface {
 	GetGroupPrivileges(groupName string) map[string]struct{}
 	GetUserRole(username string) []string
 	RefreshPolicyInfo(op typeutil.CacheOp) error
-	InitPolicyInfo(info []string, userRoles []string)
+	InitPolicyInfo(info []string, userRoles []string, privilegeGroups []string)
 
 	RemoveDatabase(ctx context.Context, database string)
 	HasDatabase(ctx context.Context, database string) bool
@@ -378,7 +378,7 @@ func InitMetaCache(ctx context.Context, rootCoord types.RootCoordClient, queryCo
 		log.Error("fail to init meta cache", zap.Error(err))
 		return err
 	}
-	globalMetaCache.InitPolicyInfo(resp.PolicyInfos, resp.UserRoles)
+	globalMetaCache.InitPolicyInfo(resp.PolicyInfos, resp.UserRoles, resp.PrivilegeGroups)
 	log.Info("success to init meta cache", zap.Strings("policy_infos", resp.PolicyInfos))
 	return nil
 }
@@ -1062,7 +1062,7 @@ func (m *MetaCache) InvalidateShardLeaderCache(collections []int64) {
 	}
 }
 
-func (m *MetaCache) InitPolicyInfo(info []string, userRoles []string) {
+func (m *MetaCache) InitPolicyInfo(info []string, userRoles []string, privilegeGroups []string) {
 	defer func() {
 		err := getEnforcer().LoadPolicy()
 		if err != nil {
@@ -1071,10 +1071,10 @@ func (m *MetaCache) InitPolicyInfo(info []string, userRoles []string) {
 	}()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.unsafeInitPolicyInfo(info, userRoles)
+	m.unsafeInitPolicyInfo(info, userRoles, privilegeGroups)
 }
 
-func (m *MetaCache) unsafeInitPolicyInfo(info []string, userRoles []string) {
+func (m *MetaCache) unsafeInitPolicyInfo(info []string, userRoles []string, privilegeGroups []string) {
 	m.privilegeInfos = util.StringSet(info)
 	for _, userRole := range userRoles {
 		user, role, err := funcutil.DecodeUserRoleCache(userRole)
@@ -1086,6 +1086,19 @@ func (m *MetaCache) unsafeInitPolicyInfo(info []string, userRoles []string) {
 			m.userToRoles[user] = make(map[string]struct{})
 		}
 		m.userToRoles[user][role] = struct{}{}
+	}
+	for _, privilegeGroup := range privilegeGroups {
+		groupName, privileges, err := funcutil.DecodePrivilegeGroupCache(privilegeGroup)
+		if err != nil {
+			log.Warn("invalid privilege group key", zap.String("privilege group", privilegeGroup), zap.Error(err))
+			continue
+		}
+		if m.privilegeGroups[groupName] == nil {
+			m.privilegeGroups[groupName] = make(map[string]struct{})
+		}
+		for _, privilege := range privileges {
+			m.privilegeGroups[groupName][privilege.Name] = struct{}{}
+		}
 	}
 }
 
@@ -1203,7 +1216,7 @@ func (m *MetaCache) RefreshPolicyInfo(op typeutil.CacheOp) (err error) {
 		m.userToRoles = make(map[string]map[string]struct{})
 		m.privilegeGroups = make(map[string]map[string]struct{})
 		m.privilegeInfos = make(map[string]struct{})
-		m.unsafeInitPolicyInfo(resp.PolicyInfos, resp.UserRoles)
+		m.unsafeInitPolicyInfo(resp.PolicyInfos, resp.UserRoles, resp.PrivilegeGroups)
 	default:
 		return fmt.Errorf("invalid opType, op_type: %d, op_key: %s", int(op.OpType), op.OpKey)
 	}
