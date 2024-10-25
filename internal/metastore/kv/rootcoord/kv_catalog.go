@@ -1450,16 +1450,10 @@ func (kc *Catalog) GetPrivilegeGroup(ctx context.Context, groupName string) ([]*
 		log.Error("failed to load privilege group", zap.String("group", groupName), zap.Error(err))
 		return nil, err
 	}
-	var privilegeNames []string
-	err = json.Unmarshal([]byte(data), &privilegeNames)
+	_, privileges, err := funcutil.DecodePrivilegeGroupCache(data)
 	if err != nil {
-		log.Error("failed to unmarshal privilege group data", zap.String("group", groupName), zap.Error(err))
+		log.Error("failed to decode privilege group cache", zap.String("group", groupName), zap.Error(err))
 		return nil, err
-	}
-
-	var privileges []*milvuspb.PrivilegeEntity
-	for _, name := range privilegeNames {
-		privileges = append(privileges, &milvuspb.PrivilegeEntity{Name: name})
 	}
 	return privileges, nil
 }
@@ -1475,22 +1469,13 @@ func (kc *Catalog) DropPrivilegeGroup(ctx context.Context, groupName string) err
 }
 
 func (kc *Catalog) AlterPrivilegeGroup(ctx context.Context, groupName string, privileges []*milvuspb.PrivilegeEntity) error {
-	var privilegeNames []string
-	for _, privilege := range privileges {
-		privilegeNames = append(privilegeNames, privilege.Name)
-	}
-
-	privilegeData, err := json.Marshal(privilegeNames)
-	if err != nil {
-		log.Error("failed to marshal privileges", zap.String("group", groupName), zap.Error(err))
-		return err
-	}
 	k := BuildPrivilegeGroupkey(groupName)
+	v := funcutil.EncodePrivilegeGroupCache(groupName, privileges)
 	hasKey, err := kc.Txn.Has(k)
 	if hasKey {
 		err = kc.Txn.Remove(k)
 	}
-	err = kc.Txn.Save(k, string(privilegeData))
+	err = kc.Txn.Save(k, v)
 	if err != nil {
 		log.Warn("fail to put privilege group", zap.String("key", k), zap.Error(err))
 		return err
@@ -1508,7 +1493,7 @@ func (kc *Catalog) ListPrivilegeGroups(ctx context.Context) ([]string, error) {
 	}
 
 	for _, value := range values {
-		privilegeGroups = append(privilegeGroups, string(value))
+		privilegeGroups = append(privilegeGroups, value)
 	}
 
 	return privilegeGroups, nil
