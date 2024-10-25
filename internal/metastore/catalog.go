@@ -88,7 +88,7 @@ type RootCoordCatalog interface {
 
 	GetPrivilegeGroup(ctx context.Context, groupName string) ([]*milvuspb.PrivilegeEntity, error)
 	DropPrivilegeGroup(ctx context.Context, groupName string) error
-	AlterPrivilegeGroup(ctx context.Context, groupName string, privileges []*milvuspb.PrivilegeEntity, operateType milvuspb.OperatePrivilegeGroupType) error
+	AlterPrivilegeGroup(ctx context.Context, groupName string, privileges []*milvuspb.PrivilegeEntity) error
 	ListPrivilegeGroups(ctx context.Context) ([]string, error)
 
 	Close()

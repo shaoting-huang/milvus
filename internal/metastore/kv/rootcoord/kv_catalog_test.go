@@ -2917,73 +2917,37 @@ func TestRBAC_PrivilegeGroup(t *testing.T) {
 
 	t.Run("test AlterPrivilegeGroup", func(t *testing.T) {
 		var (
-			kvmock = mocks.NewTxnKV(t)
-			c      = &Catalog{Txn: kvmock}
-			group  = "group1"
-			key    = BuildPrivilegeGroupkey(group)
+			kvmock     = mocks.NewTxnKV(t)
+			c          = &Catalog{Txn: kvmock}
+			group      = "group1"
+			privileges = []*milvuspb.PrivilegeEntity{{Name: "privilege1"}, {Name: "privilege2"}}
+			key        = BuildPrivilegeGroupkey(group)
 		)
 
+		kvmock.EXPECT().Has(key).Return(true, nil)
+		kvmock.EXPECT().Remove(key).Return(nil)
+		kvmock.EXPECT().Save(key, mock.Anything).Return(nil)
+
+		kvmock.EXPECT().Has(key).Return(false, nil)
+		kvmock.EXPECT().Save(key, mock.Anything).Return(nil)
+
 		tests := []struct {
-			description   string
-			initialPrivs  []*milvuspb.PrivilegeEntity // Initial privileges in the group
-			groupName     string
-			privileges    []*milvuspb.PrivilegeEntity // Privileges to add/remove
-			operateType   milvuspb.OperatePrivilegeGroupType
-			expectedPrivs []*milvuspb.PrivilegeEntity // Expected privileges after operation
-			expectedErr   bool
+			description string
+			isValid     bool
+			groupName   string
+			privileges  []*milvuspb.PrivilegeEntity
 		}{
-			{
-				description:   "add new privilege to group",
-				initialPrivs:  []*milvuspb.PrivilegeEntity{{Name: "privilege1"}},
-				groupName:     group,
-				privileges:    []*milvuspb.PrivilegeEntity{{Name: "privilege2"}},
-				operateType:   milvuspb.OperatePrivilegeGroupType_AddPrivilegesToGroup,
-				expectedPrivs: []*milvuspb.PrivilegeEntity{{Name: "privilege1"}, {Name: "privilege2"}},
-				expectedErr:   false,
-			},
-			{
-				description:   "add existing privilege to group",
-				initialPrivs:  []*milvuspb.PrivilegeEntity{{Name: "privilege1"}},
-				groupName:     group,
-				privileges:    []*milvuspb.PrivilegeEntity{{Name: "privilege1"}},
-				operateType:   milvuspb.OperatePrivilegeGroupType_AddPrivilegesToGroup,
-				expectedPrivs: []*milvuspb.PrivilegeEntity{{Name: "privilege1"}}, // Should not duplicate
-				expectedErr:   false,
-			},
-			{
-				description:   "remove privilege from group",
-				initialPrivs:  []*milvuspb.PrivilegeEntity{{Name: "privilege1"}, {Name: "privilege2"}},
-				groupName:     group,
-				privileges:    []*milvuspb.PrivilegeEntity{{Name: "privilege1"}},
-				operateType:   milvuspb.OperatePrivilegeGroupType_RemovePrivilegesFromGroup,
-				expectedPrivs: []*milvuspb.PrivilegeEntity{{Name: "privilege2"}},
-				expectedErr:   false,
-			},
-			{
-				description:   "remove non-existent privilege from group",
-				initialPrivs:  []*milvuspb.PrivilegeEntity{{Name: "privilege1"}},
-				groupName:     group,
-				privileges:    []*milvuspb.PrivilegeEntity{{Name: "privilege3"}},
-				operateType:   milvuspb.OperatePrivilegeGroupType_RemovePrivilegesFromGroup,
-				expectedPrivs: []*milvuspb.PrivilegeEntity{{Name: "privilege1"}}, // No change
-				expectedErr:   false,
-			},
+			{"valid group with existing key", true, group, privileges},
+			{"valid group without existing key", true, group, privileges},
 		}
 
 		for _, test := range tests {
 			t.Run(test.description, func(t *testing.T) {
-				initialData := funcutil.EncodePrivilegeGroupCache(test.groupName, test.initialPrivs)
-				kvmock.EXPECT().Load(key).Return(initialData, nil)
-
-				expectedData := funcutil.EncodePrivilegeGroupCache(test.groupName, test.expectedPrivs)
-				kvmock.EXPECT().Save(key, expectedData).Return(nil)
-
-				err := c.AlterPrivilegeGroup(ctx, test.groupName, test.privileges, test.operateType)
-
-				if test.expectedErr {
-					assert.Error(t, err)
-				} else {
+				err := c.AlterPrivilegeGroup(ctx, test.groupName, test.privileges)
+				if test.isValid {
 					assert.NoError(t, err)
+				} else {
+					assert.Error(t, err)
 				}
 			})
 		}

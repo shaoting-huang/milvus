@@ -1474,59 +1474,25 @@ func (kc *Catalog) DropPrivilegeGroup(ctx context.Context, groupName string) err
 	return nil
 }
 
-func (kc *Catalog) AlterPrivilegeGroup(ctx context.Context, groupName string, privileges []*milvuspb.PrivilegeEntity, operateType milvuspb.OperatePrivilegeGroupType) error {
+func (kc *Catalog) AlterPrivilegeGroup(ctx context.Context, groupName string, privileges []*milvuspb.PrivilegeEntity) error {
+	var privilegeNames []string
+	for _, privilege := range privileges {
+		privilegeNames = append(privilegeNames, privilege.Name)
+	}
+
+	privilegeData, err := json.Marshal(privilegeNames)
+	if err != nil {
+		log.Error("failed to marshal privileges", zap.String("group", groupName), zap.Error(err))
+		return err
+	}
 	k := BuildPrivilegeGroupkey(groupName)
-	existingPrivilegeData, err := kc.Txn.Load(k)
-	fmt.Println(existingPrivilegeData)
+	hasKey, err := kc.Txn.Has(k)
+	if hasKey {
+		err = kc.Txn.Remove(k)
+	}
+	err = kc.Txn.Save(k, string(privilegeData))
 	if err != nil {
-		log.Error("failed to retrieve existing privileges", zap.String("group", groupName), zap.Error(err))
-		return err
-	}
-
-	_, existingPrivileges, err := funcutil.DecodePrivilegeGroupCache(string(existingPrivilegeData))
-	if err != nil {
-		log.Error("failed to decode existing privileges", zap.String("group", groupName), zap.Error(err))
-		return err
-	}
-
-	existingPrivilegesMap := make(map[string]struct{}, len(existingPrivileges))
-	for _, p := range existingPrivileges {
-		existingPrivilegesMap[p.Name] = struct{}{}
-	}
-
-	switch operateType {
-	case milvuspb.OperatePrivilegeGroupType_AddPrivilegesToGroup:
-		// Add new privileges without duplicates
-		for _, p := range privileges {
-			if _, exists := existingPrivilegesMap[p.Name]; !exists {
-				existingPrivileges = append(existingPrivileges, p)
-			}
-		}
-
-	case milvuspb.OperatePrivilegeGroupType_RemovePrivilegesFromGroup:
-		// Remove specified privileges
-		toRemove := make(map[string]struct{}, len(privileges))
-		for _, p := range privileges {
-			toRemove[p.Name] = struct{}{}
-		}
-		var updatedPrivileges []*milvuspb.PrivilegeEntity
-		for _, p := range existingPrivileges {
-			if _, remove := toRemove[p.Name]; !remove {
-				updatedPrivileges = append(updatedPrivileges, p)
-			}
-		}
-		existingPrivileges = updatedPrivileges
-
-	default:
-		return fmt.Errorf("invalid operate privilege group type: %s", operateType.String())
-	}
-
-	// Encode updated privileges
-	encodedPrivilegeData := funcutil.EncodePrivilegeGroupCache(groupName, existingPrivileges)
-
-	// Update metadata
-	if err := kc.Txn.Save(k, encodedPrivilegeData); err != nil {
-		log.Error("failed to update privilege group", zap.String("group", groupName), zap.Error(err))
+		log.Warn("fail to put privilege group", zap.String("key", k), zap.Error(err))
 		return err
 	}
 	return nil
