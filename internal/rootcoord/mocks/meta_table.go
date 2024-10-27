@@ -423,6 +423,210 @@ func (_c *IMetaTable_BackupRBAC_Call) RunAndReturn(run func(context.Context, str
 	return _c
 }
 
+// CreatePrivilegeGroup provides a mock function with given fields: ctx, groupName
+func (_m *IMetaTable) CreatePrivilegeGroup(ctx context.Context, groupName string) error {
+	ret := _m.Called(ctx, groupName)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CreatePrivilegeGroup")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context,string) error); ok {
+		r0 = rf(ctx, groupName)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// IMetaTable_CreatePrivilegeGroup_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CreatePrivilegeGroup'
+type IMetaTable_CreatePrivilegeGroup_Call struct {
+	*mock.Call
+}
+
+// CreatePrivilegeGroup is a helper method to define mock.On call
+//   - ctx context.Context
+//   - groupName string
+func (_e *IMetaTable_Expecter) CreatePrivilegeGroup(ctx interface{}, groupName interface{}) *IMetaTable_CreatePrivilegeGroup_Call {
+	return &IMetaTable_CreatePrivilegeGroup_Call{Call: _e.mock.On("CreatePrivilegeGroup", ctx, groupName)}
+}
+
+func (_c *IMetaTable_CreatePrivilegeGroup_Call) Run(run func(ctx context.Context, groupName string)) *IMetaTable_CreatePrivilegeGroup_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string))
+	})
+	return _c
+}
+
+func (_c *IMetaTable_CreatePrivilegeGroup_Call) Return(_a0 error) *IMetaTable_CreatePrivilegeGroup_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *IMetaTable_CreatePrivilegeGroup_Call) RunAndReturn(run func(context.Context, string) error) *IMetaTable_CreatePrivilegeGroup_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+
+// DropPrivilegeGroup provides a mock function with given fields: ctx, groupName
+func (_m *IMetaTable) DropPrivilegeGroup(ctx context.Context, groupName string) error {
+	ret := _m.Called(ctx, groupName)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DropPrivilegeGroup")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context,string) error); ok {
+		r0 = rf(ctx, groupName)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// IMetaTable_DropPrivilegeGroup_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DropPrivilegeGroup'
+type IMetaTable_DropPrivilegeGroup_Call struct {
+	*mock.Call
+}
+
+// DropPrivilegeGroup is a helper method to define mock.On call
+//   - ctx context.Context
+//   - groupName string
+func (_e *IMetaTable_Expecter) DropPrivilegeGroup(ctx interface{}, groupName interface{}) *IMetaTable_DropPrivilegeGroup_Call {
+	return &IMetaTable_DropPrivilegeGroup_Call{Call: _e.mock.On("DropPrivilegeGroup", ctx, groupName)}
+}
+
+func (_c *IMetaTable_DropPrivilegeGroup_Call) Run(run func(ctx context.Context, groupName string)) *IMetaTable_DropPrivilegeGroup_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string))
+	})
+	return _c
+}
+
+func (_c *IMetaTable_DropPrivilegeGroup_Call) Return(_a0 error) *IMetaTable_DropPrivilegeGroup_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *IMetaTable_DropPrivilegeGroup_Call) RunAndReturn(run func(context.Context, string) error) *IMetaTable_DropPrivilegeGroup_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+
+// ListPrivilegeGroups provides a mock function with given fields: tenant
+func (_m *IMetaTable) ListPrivilegeGroups(ctx context.Context) ([]string, error) {
+	ret := _m.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListPrivilegeGroups")
+	}
+
+	var r0 []string
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context) ([]string, error)); ok {
+		return rf(ctx)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context) []string); ok {
+		r0 = rf(ctx)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]string)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = rf(ctx)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// IMetaTable_ListPrivilegeGroups_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListPrivilegeGroups'
+type IMetaTable_ListPrivilegeGroups_Call struct {
+	*mock.Call
+}
+
+// ListPrivilegeGroups is a helper method to define mock.On call
+//   - ctx context.Context
+//   - groupName string
+func (_e *IMetaTable_Expecter) ListPrivilegeGroups(ctx interface{}) *IMetaTable_ListPrivilegeGroups_Call {
+	return &IMetaTable_ListPrivilegeGroups_Call{Call: _e.mock.On("ListPrivilegeGroups", ctx)}
+}
+
+func (_c *IMetaTable_ListPrivilegeGroups_Call) Run(run func(ctx context.Context)) *IMetaTable_ListPrivilegeGroups_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context))
+	})
+	return _c
+}
+
+func (_c *IMetaTable_ListPrivilegeGroups_Call) Return(_a0 []string, _a1 error) *IMetaTable_ListPrivilegeGroups_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *IMetaTable_ListPrivilegeGroups_Call) RunAndReturn(run func(context.Context, string) ([]string, error)) *IMetaTable_ListPrivilegeGroups_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+
+// OperatePrivilegeGroup provides a mock function with given fields: ctx
+func (_m *IMetaTable) OperatePrivilegeGroup(ctx context.Context, groupName string, privileges []*milvuspb.PrivilegeEntity, operateType milvuspb.OperatePrivilegeGroupType) error {
+	ret := _m.Called(ctx, groupName, privileges, operateType)
+
+	if len(ret) == 0 {
+		panic("no return value specified for OperatePrivilegeGroup")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, string, []*milvuspb.PrivilegeEntity, milvuspb.OperatePrivilegeGroupType) error); ok {
+		r0 = rf(ctx, groupName, privileges, operateType)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// IMetaTable_OperatePrivilegeGroup_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'OperatePrivilegeGroup'
+type IMetaTable_OperatePrivilegeGroup_Call struct {
+	*mock.Call
+}
+
+// OperatePrivilegeGroup is a helper method to define mock.On call
+//   - ctx context.Context
+//   - groupName string
+func (_e *IMetaTable_Expecter) OperatePrivilegeGroup(ctx interface{}, groupName interface{}, privileges interface{}, operateType interface{}) *IMetaTable_OperatePrivilegeGroup_Call {
+	return &IMetaTable_OperatePrivilegeGroup_Call{Call: _e.mock.On("OperatePrivilegeGroup", ctx, groupName, privileges, operateType)}
+}
+
+func (_c *IMetaTable_OperatePrivilegeGroup_Call) Run(run func(ctx context.Context, groupName string, privileges []*milvuspb.PrivilegeEntity, operateType milvuspb.OperatePrivilegeGroupType)) *IMetaTable_OperatePrivilegeGroup_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string), args[2].([]*milvuspb.PrivilegeEntity), args[3].(milvuspb.OperatePrivilegeGroupType))
+	})
+	return _c
+}
+
+func (_c *IMetaTable_OperatePrivilegeGroup_Call) Return(_a0 error) *IMetaTable_OperatePrivilegeGroup_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *IMetaTable_OperatePrivilegeGroup_Call) RunAndReturn(run func(context.Context, string, []*milvuspb.PrivilegeEntity, milvuspb.OperatePrivilegeGroupType) error) *IMetaTable_OperatePrivilegeGroup_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+
 // ChangeCollectionState provides a mock function with given fields: ctx, collectionID, state, ts
 func (_m *IMetaTable) ChangeCollectionState(ctx context.Context, collectionID int64, state etcdpb.CollectionState, ts uint64) error {
 	ret := _m.Called(ctx, collectionID, state, ts)
@@ -1964,16 +2168,16 @@ func (_c *IMetaTable_ListUserRole_Call) RunAndReturn(run func(string) ([]string,
 }
 
 // OperatePrivilege provides a mock function with given fields: tenant, entity, operateType
-func (_m *IMetaTable) OperatePrivilege(tenant string, entity *milvuspb.GrantEntity, operateType milvuspb.OperatePrivilegeType) error {
-	ret := _m.Called(tenant, entity, operateType)
+func (_m *IMetaTable) OperatePrivilege(ctx context.Context, tenant string, entity *milvuspb.GrantEntity, operateType milvuspb.OperatePrivilegeType) error {
+	ret := _m.Called(ctx, tenant, entity, operateType)
 
 	if len(ret) == 0 {
 		panic("no return value specified for OperatePrivilege")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(string, *milvuspb.GrantEntity, milvuspb.OperatePrivilegeType) error); ok {
-		r0 = rf(tenant, entity, operateType)
+	if rf, ok := ret.Get(0).(func(context.Context, string, *milvuspb.GrantEntity, milvuspb.OperatePrivilegeType) error); ok {
+		r0 = rf(ctx, tenant, entity, operateType)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -1990,13 +2194,13 @@ type IMetaTable_OperatePrivilege_Call struct {
 //   - tenant string
 //   - entity *milvuspb.GrantEntity
 //   - operateType milvuspb.OperatePrivilegeType
-func (_e *IMetaTable_Expecter) OperatePrivilege(tenant interface{}, entity interface{}, operateType interface{}) *IMetaTable_OperatePrivilege_Call {
-	return &IMetaTable_OperatePrivilege_Call{Call: _e.mock.On("OperatePrivilege", tenant, entity, operateType)}
+func (_e *IMetaTable_Expecter) OperatePrivilege(ctx interface{}, tenant interface{}, entity interface{}, operateType interface{}) *IMetaTable_OperatePrivilege_Call {
+	return &IMetaTable_OperatePrivilege_Call{Call: _e.mock.On("OperatePrivilege", ctx, tenant, entity, operateType)}
 }
 
-func (_c *IMetaTable_OperatePrivilege_Call) Run(run func(tenant string, entity *milvuspb.GrantEntity, operateType milvuspb.OperatePrivilegeType)) *IMetaTable_OperatePrivilege_Call {
+func (_c *IMetaTable_OperatePrivilege_Call) Run(run func(ctx context.Context, tenant string, entity *milvuspb.GrantEntity, operateType milvuspb.OperatePrivilegeType)) *IMetaTable_OperatePrivilege_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(string), args[1].(*milvuspb.GrantEntity), args[2].(milvuspb.OperatePrivilegeType))
+		run(args[0].(context.Context), args[1].(string), args[2].(*milvuspb.GrantEntity), args[3].(milvuspb.OperatePrivilegeType))
 	})
 	return _c
 }
@@ -2006,7 +2210,7 @@ func (_c *IMetaTable_OperatePrivilege_Call) Return(_a0 error) *IMetaTable_Operat
 	return _c
 }
 
-func (_c *IMetaTable_OperatePrivilege_Call) RunAndReturn(run func(string, *milvuspb.GrantEntity, milvuspb.OperatePrivilegeType) error) *IMetaTable_OperatePrivilege_Call {
+func (_c *IMetaTable_OperatePrivilege_Call) RunAndReturn(run func(context.Context, string, *milvuspb.GrantEntity, milvuspb.OperatePrivilegeType) error) *IMetaTable_OperatePrivilege_Call {
 	_c.Call.Return(run)
 	return _c
 }
