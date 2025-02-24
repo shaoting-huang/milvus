@@ -198,6 +198,10 @@ func (i *IndexNode) initSegcore() {
 	cGpuMemoryPoolInitSize := C.uint32_t(paramtable.Get().GpuConfig.InitSize.GetAsUint32())
 	cGpuMemoryPoolMaxSize := C.uint32_t(paramtable.Get().GpuConfig.MaxSize.GetAsUint32())
 	C.SegcoreSetKnowhereGpuMemoryPoolSize(cGpuMemoryPoolInitSize, cGpuMemoryPoolMaxSize)
+
+	if paramtable.Get().CommonCfg.EnableStorageV2.GetAsBool() {
+		initcore.InitStorageV2FileSystem(paramtable.Get())
+	}
 }
 
 func (i *IndexNode) CloseSegcore() {

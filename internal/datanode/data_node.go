@@ -51,6 +51,7 @@ import (
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/dependency"
+	"github.com/milvus-io/milvus/internal/util/initcore"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
 	"github.com/milvus-io/milvus/internal/util/streamingutil"
 	"github.com/milvus-io/milvus/pkg/v2/kv"
@@ -274,6 +275,13 @@ func (node *DataNode) Init() error {
 		node.importScheduler = importv2.NewScheduler(node.importTaskMgr)
 		node.channelCheckpointUpdater = util2.NewChannelCheckpointUpdater(node.broker)
 		node.flowgraphManager = pipeline.NewFlowgraphManager()
+
+		if paramtable.Get().CommonCfg.EnableStorageV2.GetAsBool() {
+			if err := initcore.InitStorageV2FileSystem(paramtable.Get()); err != nil {
+				initError = err
+				return
+			}
+		}
 
 		log.Info("init datanode done", zap.String("Address", node.address))
 	})
