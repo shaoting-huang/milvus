@@ -35,10 +35,11 @@ const (
 )
 
 type rwOptions struct {
-	version    int64
-	bufferSize int64
-	downloader func(ctx context.Context, paths []string) ([][]byte, error)
-	uploader   func(ctx context.Context, kvs map[string][]byte) error
+	version             int64
+	bufferSize          int64
+	downloader          func(ctx context.Context, paths []string) ([][]byte, error)
+	uploader            func(ctx context.Context, kvs map[string][]byte) error
+	multiPartUploadSize int64
 }
 
 type RwOption func(*rwOptions)
@@ -58,6 +59,12 @@ func WithVersion(version int64) RwOption {
 func WithBufferSize(bufferSize int64) RwOption {
 	return func(options *rwOptions) {
 		options.bufferSize = bufferSize
+	}
+}
+
+func WithMultiPartUploadSize(multiPartUploadSize int64) RwOption {
+	return func(options *rwOptions) {
+		options.multiPartUploadSize = multiPartUploadSize
 	}
 }
 
@@ -130,20 +137,47 @@ func NewBinlogRecordWriter(ctx context.Context, collectionID, partitionID, segme
 	for _, opt := range option {
 		opt(rwOptions)
 	}
+	blobsWriter := func(blobs []*Blob) error {
+		kvs := make(map[string][]byte, len(blobs))
+		for _, blob := range blobs {
+			kvs[blob.Key] = blob.Value
+		}
+		return rwOptions.uploader(ctx, kvs)
+	}
 	switch rwOptions.version {
 	case StorageV1:
-		blobsWriter := func(blobs []*Blob) error {
-			kvs := make(map[string][]byte, len(blobs))
-			for _, blob := range blobs {
-				kvs[blob.Key] = blob.Value
-			}
-			return rwOptions.uploader(ctx, kvs)
-		}
 		return newCompositeBinlogRecordWriter(collectionID, partitionID, segmentID, schema,
 			blobsWriter, allocator, chunkSize, rootPath, maxRowNum,
 		)
 	case StorageV2:
-		// TODO: integrate v2
+		// TODO: support column groups generator to split columns by stats
+		columnGroups := generateColumnGroups(schema)
+		return newPackedRecordWriter(collectionID, partitionID, segmentID, schema,
+			blobsWriter, allocator, chunkSize, rootPath, maxRowNum, rwOptions.bufferSize, rwOptions.multiPartUploadSize, columnGroups,
+		)
 	}
 	return nil, merr.WrapErrServiceInternal(fmt.Sprintf("unsupported storage version %d", rwOptions.version))
+}
+
+func isShortField(field *schemapb.FieldSchema) bool {
+	switch field.DataType {
+	case schemapb.DataType_Bool, schemapb.DataType_Int8, schemapb.DataType_Int16,
+		schemapb.DataType_Int32, schemapb.DataType_Int64:
+		return true
+	default:
+		return false
+	}
+}
+
+func generateColumnGroups(schema *schemapb.CollectionSchema) [][]int {
+	shortColumnGroups := make([]int, 0)
+	longColumnGroups := make([]int, 0)
+	for i, field := range schema.Fields {
+		if isShortField(field) {
+			shortColumnGroups = append(shortColumnGroups, i)
+		} else {
+			longColumnGroups = append(longColumnGroups, i)
+		}
+	}
+	return [][]int{shortColumnGroups, longColumnGroups}
 }

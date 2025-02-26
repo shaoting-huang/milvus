@@ -19,13 +19,22 @@ package storage
 import (
 	"fmt"
 	"io"
+	"math"
 
 	"github.com/apache/arrow/go/v17/arrow"
+	"github.com/apache/arrow/go/v17/arrow/array"
+	"github.com/samber/lo"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
+	"github.com/milvus-io/milvus/internal/allocator"
 	"github.com/milvus-io/milvus/internal/storagev2/packed"
 	"github.com/milvus-io/milvus/pkg/v2/common"
+	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
+	"github.com/milvus-io/milvus/pkg/v2/proto/etcdpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
+	"github.com/milvus-io/milvus/pkg/v2/util/metautil"
+	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
 
 type ChunkedPathsReader func() ([]string, error)
@@ -188,32 +197,131 @@ func NewPackedDeserializeReader(pathsReader ChunkedPathsReader, schema *schemapb
 	}), nil
 }
 
-var _ RecordWriter = (*packedRecordWriter)(nil)
+var _ BinlogRecordWriter = (*packedRecordWriter)(nil)
 
 type packedRecordWriter struct {
-	writer *packed.PackedWriter
+	// attributes
+	collectionID UniqueID
+	partitionID  UniqueID
+	segmentID    UniqueID
+	schema       *schemapb.CollectionSchema
+	BlobsWriter  ChunkedBlobsWriter
+	allocator    allocator.Interface
+	chunkSize    uint64
+	rootPath     string
+	maxRowNum    int64
+	pkstats      *PrimaryKeyStats
+	bm25Stats    map[int64]*BM25Stats
 
+	// writer and stats generated at runtime
+	writer              *packed.PackedWriter
+	arrowSchema         *arrow.Schema
 	bufferSize          int64
 	multiPartUploadSize int64
 	columnGroups        [][]int
-	paths               []string
-	schema              *arrow.Schema
-
-	numRows             int
+	tsFrom              typeutil.Timestamp
+	tsTo                typeutil.Timestamp
+	rowNum              int64
+	currChunkSize       uint64
+	currRowNum          int64
+	currPaths           []string
 	writtenUncompressed uint64
+
+	// results
+	fieldBinlogs map[FieldID]*datapb.FieldBinlog
+	statsLog     *datapb.FieldBinlog
+	bm25StatsLog map[FieldID]*datapb.FieldBinlog
 }
 
 func (pw *packedRecordWriter) Write(r Record) error {
+	if err := pw.initWriters(); err != nil {
+		return err
+	}
+
+	tsArray := r.Column(common.TimeStampField).(*array.Int64)
+	rows := r.Len()
+	for i := 0; i < rows; i++ {
+		ts := typeutil.Timestamp(tsArray.Value(i))
+		if ts < pw.tsFrom {
+			pw.tsFrom = ts
+		}
+		if ts > pw.tsTo {
+			pw.tsTo = ts
+		}
+
+		switch schemapb.DataType(pw.pkstats.PkType) {
+		case schemapb.DataType_Int64:
+			pkArray := r.Column(pw.pkstats.FieldID).(*array.Int64)
+			pk := &Int64PrimaryKey{
+				Value: pkArray.Value(i),
+			}
+			pw.pkstats.Update(pk)
+		case schemapb.DataType_VarChar:
+			pkArray := r.Column(pw.pkstats.FieldID).(*array.String)
+			pk := &VarCharPrimaryKey{
+				Value: pkArray.Value(i),
+			}
+			pw.pkstats.Update(pk)
+		default:
+			panic("invalid data type")
+		}
+
+		for fieldID, stats := range pw.bm25Stats {
+			field, ok := r.Column(fieldID).(*array.Binary)
+			if !ok {
+				return fmt.Errorf("bm25 field value not found")
+			}
+			stats.AppendBytes(field.Value(i))
+		}
+	}
+
 	rec, ok := r.(*simpleArrowRecord)
 	if !ok {
 		return merr.WrapErrServiceInternal("can not cast to simple arrow record")
 	}
-	pw.numRows += r.Len()
+	pw.rowNum += int64(rows)
+	pw.currRowNum += int64(rows)
+
 	for _, arr := range rec.r.Columns() {
-		pw.writtenUncompressed += uint64(calculateArraySize(arr))
+		pw.currChunkSize += uint64(calculateArraySize(arr))
 	}
 	defer rec.Release()
-	return pw.writer.WriteRecordBatch(rec.r)
+	err := pw.writer.WriteRecordBatch(rec.r)
+	if err != nil {
+		return merr.WrapErrServiceInternal(fmt.Sprintf("write record batch error: %s", err.Error()))
+	}
+
+	if pw.currChunkSize >= pw.chunkSize {
+		return pw.flushChunk()
+	}
+	return nil
+}
+
+func (pw *packedRecordWriter) initWriters() error {
+	if pw.writer == nil {
+		id, _, err := pw.allocator.Alloc(uint32(len(pw.columnGroups)))
+		if err != nil {
+			return err
+		}
+		for columnGroup := range pw.columnGroups {
+			path := metautil.BuildInsertLogPath(pw.rootPath, pw.collectionID, pw.partitionID, pw.segmentID, typeutil.UniqueID(columnGroup), id)
+			pw.currPaths = append(pw.currPaths, path)
+		}
+		pw.writer, err = packed.NewPackedWriter(pw.currPaths, pw.arrowSchema, pw.bufferSize, pw.multiPartUploadSize, pw.columnGroups)
+		if err != nil {
+			return merr.WrapErrServiceInternal(fmt.Sprintf("can not new packed record writer %s", err.Error()))
+		}
+	}
+	return nil
+}
+
+func (pw *packedRecordWriter) resetWriters() {
+	pw.writer = nil
+	pw.currChunkSize = 0
+	pw.currRowNum = 0
+	pw.tsFrom = math.MaxUint64
+	pw.tsTo = 0
+	pw.currPaths = []string{}
 }
 
 func (pw *packedRecordWriter) GetWrittenUncompressed() uint64 {
@@ -221,38 +329,190 @@ func (pw *packedRecordWriter) GetWrittenUncompressed() uint64 {
 }
 
 func (pw *packedRecordWriter) Close() error {
+	if err := pw.writeStats(); err != nil {
+		return err
+	}
+	if err := pw.writeBm25Stats(); err != nil {
+		return err
+	}
 	if pw.writer != nil {
+		// already handle flushing the last chunk when close
 		return pw.writer.Close()
 	}
 	return nil
 }
 
-func NewPackedRecordWriter(paths []string, schema *arrow.Schema, bufferSize int64, multiPartUploadSize int64, columnGroups [][]int) (*packedRecordWriter, error) {
-	writer, err := packed.NewPackedWriter(paths, schema, bufferSize, multiPartUploadSize, columnGroups)
-	if err != nil {
-		return nil, merr.WrapErrServiceInternal(
-			fmt.Sprintf("can not new packed record writer %s", err.Error()))
+func (pw *packedRecordWriter) flushChunk() error {
+	if pw.writer == nil {
+		return nil
 	}
-	return &packedRecordWriter{
-		writer:     writer,
-		schema:     schema,
-		bufferSize: bufferSize,
-		paths:      paths,
-	}, nil
+	if err := pw.writer.Close(); err != nil {
+		return merr.WrapErrServiceInternal(fmt.Sprintf("close current packed writer error: %s", err.Error()))
+	}
+	if pw.fieldBinlogs == nil {
+		pw.fieldBinlogs = make(map[FieldID]*datapb.FieldBinlog, len(pw.columnGroups))
+		for columnGroup := range len(pw.columnGroups) {
+			columnGroupID := typeutil.UniqueID(columnGroup)
+			pw.fieldBinlogs[columnGroupID] = &datapb.FieldBinlog{
+				FieldID: columnGroupID,
+			}
+		}
+	}
+	for columnGroup := range pw.columnGroups {
+		columnGroupID := typeutil.UniqueID(columnGroup)
+		pw.fieldBinlogs[columnGroupID].Binlogs = append(pw.fieldBinlogs[columnGroupID].Binlogs, &datapb.Binlog{
+			LogSize:       0, // TODO: should provide the size of the binlog in storage v2
+			MemorySize:    int64(pw.currChunkSize),
+			LogPath:       pw.currPaths[columnGroup],
+			EntriesNum:    pw.currRowNum,
+			TimestampFrom: pw.tsFrom,
+			TimestampTo:   pw.tsTo,
+		})
+	}
+
+	pw.resetWriters()
+	return nil
 }
 
-func NewPackedSerializeWriter(paths []string, schema *schemapb.CollectionSchema, bufferSize int64, multiPartUploadSize int64, columnGroups [][]int, batchSize int) (*SerializeWriter[*Value], error) {
+func (pw *packedRecordWriter) writeStats() error {
+	if pw.pkstats == nil {
+		return nil
+	}
+
+	id, err := pw.allocator.AllocOne()
+	if err != nil {
+		return err
+	}
+
+	codec := NewInsertCodecWithSchema(&etcdpb.CollectionMeta{
+		ID:     pw.collectionID,
+		Schema: pw.schema,
+	})
+	sblob, err := codec.SerializePkStats(pw.pkstats, pw.rowNum)
+	if err != nil {
+		return err
+	}
+
+	sblob.Key = metautil.BuildStatsLogPath(pw.rootPath,
+		pw.collectionID, pw.partitionID, pw.segmentID, pw.pkstats.FieldID, id)
+
+	if err := pw.BlobsWriter([]*Blob{sblob}); err != nil {
+		return err
+	}
+
+	pw.statsLog = &datapb.FieldBinlog{
+		FieldID: pw.pkstats.FieldID,
+		Binlogs: []*datapb.Binlog{
+			{
+				LogSize:    int64(len(sblob.GetValue())),
+				MemorySize: int64(len(sblob.GetValue())),
+				LogPath:    sblob.Key,
+				EntriesNum: pw.rowNum,
+			},
+		},
+	}
+	return nil
+}
+
+func (pw *packedRecordWriter) writeBm25Stats() error {
+	if len(pw.bm25Stats) == 0 {
+		return nil
+	}
+	id, _, err := pw.allocator.Alloc(uint32(len(pw.bm25Stats)))
+	if err != nil {
+		return err
+	}
+
+	if pw.bm25StatsLog == nil {
+		pw.bm25StatsLog = make(map[FieldID]*datapb.FieldBinlog)
+	}
+	for fid, stats := range pw.bm25Stats {
+		bytes, err := stats.Serialize()
+		if err != nil {
+			return err
+		}
+		key := metautil.BuildBm25LogPath(pw.rootPath,
+			pw.collectionID, pw.partitionID, pw.segmentID, fid, id)
+		blob := &Blob{
+			Key:        key,
+			Value:      bytes,
+			RowNum:     stats.NumRow(),
+			MemorySize: int64(len(bytes)),
+		}
+		if err := pw.BlobsWriter([]*Blob{blob}); err != nil {
+			return err
+		}
+
+		fieldLog := &datapb.FieldBinlog{
+			FieldID: fid,
+			Binlogs: []*datapb.Binlog{
+				{
+					LogSize:    int64(len(blob.GetValue())),
+					MemorySize: int64(len(blob.GetValue())),
+					LogPath:    key,
+					EntriesNum: pw.rowNum,
+				},
+			},
+		}
+
+		pw.bm25StatsLog[fid] = fieldLog
+		id++
+	}
+
+	return nil
+}
+
+func (pw *packedRecordWriter) GetLogs() (
+	fieldBinlogs map[FieldID]*datapb.FieldBinlog,
+	statsLog *datapb.FieldBinlog,
+	bm25StatsLog map[FieldID]*datapb.FieldBinlog,
+) {
+	return pw.fieldBinlogs, pw.statsLog, pw.bm25StatsLog
+}
+
+func (pw *packedRecordWriter) GetRowNum() int64 {
+	return int64(pw.rowNum)
+}
+
+func newPackedRecordWriter(collectionID, partitionID, segmentID UniqueID, schema *schemapb.CollectionSchema,
+	blobsWriter ChunkedBlobsWriter, allocator allocator.Interface, chunkSize uint64, rootPath string, maxRowNum int64, bufferSize, multiPartUploadSize int64, columnGroups [][]int,
+) (*packedRecordWriter, error) {
 	arrowSchema, err := ConvertToArrowSchema(schema.Fields)
 	if err != nil {
-		return nil, merr.WrapErrServiceInternal(
-			fmt.Sprintf("can not convert collection schema %s to arrow schema: %s", schema.Name, err.Error()))
+		return nil, merr.WrapErrParameterInvalid("convert collection schema [%s] to arrow schema error: %s", schema.Name, err.Error())
 	}
-	packedRecordWriter, err := NewPackedRecordWriter(paths, arrowSchema, bufferSize, multiPartUploadSize, columnGroups)
+	pkField, err := typeutil.GetPrimaryFieldSchema(schema)
 	if err != nil {
-		return nil, merr.WrapErrServiceInternal(
-			fmt.Sprintf("can not new packed record writer %s", err.Error()))
+		log.Warn("failed to get pk field from schema")
+		return nil, err
 	}
-	return NewSerializeRecordWriter[*Value](packedRecordWriter, func(v []*Value) (Record, error) {
-		return ValueSerializer(v, schema.Fields)
-	}, batchSize), nil
+	stats, err := NewPrimaryKeyStats(pkField.GetFieldID(), int64(pkField.GetDataType()), maxRowNum)
+	if err != nil {
+		return nil, err
+	}
+	bm25FieldIDs := lo.FilterMap(schema.GetFunctions(), func(function *schemapb.FunctionSchema, _ int) (int64, bool) {
+		if function.GetType() == schemapb.FunctionType_BM25 {
+			return function.GetOutputFieldIds()[0], true
+		}
+		return 0, false
+	})
+	bm25Stats := make(map[int64]*BM25Stats, len(bm25FieldIDs))
+	for _, fid := range bm25FieldIDs {
+		bm25Stats[fid] = NewBM25Stats()
+	}
+
+	return &packedRecordWriter{
+		collectionID: collectionID,
+		partitionID:  partitionID,
+		segmentID:    segmentID,
+		schema:       schema,
+		arrowSchema:  arrowSchema,
+		BlobsWriter:  blobsWriter,
+		allocator:    allocator,
+		chunkSize:    chunkSize,
+		rootPath:     rootPath,
+		maxRowNum:    maxRowNum,
+		pkstats:      stats,
+		bm25Stats:    bm25Stats,
+	}, nil
 }
