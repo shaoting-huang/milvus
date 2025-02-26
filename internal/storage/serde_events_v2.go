@@ -18,6 +18,7 @@ package storage
 
 import (
 	"fmt"
+	"io"
 
 	"github.com/apache/arrow/go/v17/arrow"
 
@@ -79,9 +80,15 @@ func (pr *packedRecordReader) Next() (Record, error) {
 	}
 }
 
-func MakeChunkedPathsReader(paths []string) ChunkedPathsReader {
+func MakeChunkedPathsReader(paths [][]string) ChunkedPathsReader {
+	chunkPos := 0
 	return func() ([]string, error) {
-		return paths, nil
+		if chunkPos >= len(paths) {
+			return nil, io.EOF
+		}
+		chunkPaths := paths[chunkPos]
+		chunkPos++
+		return chunkPaths, nil
 	}
 }
 
