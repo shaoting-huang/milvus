@@ -22,7 +22,6 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/milvus-io/milvus/internal/util/initcore"
-	"github.com/milvus-io/milvus/pkg/v2/common"
 )
 
 func TestPackedSerde(t *testing.T) {
@@ -62,7 +61,7 @@ func TestPackedSerde(t *testing.T) {
 		err = writer.Close()
 		assert.NoError(t, err)
 
-		reader, err = NewPackedDeserializeReader(paths, schema, bufferSize, common.RowIDField)
+		reader, err = NewPackedDeserializeReader(MakeChunkedPathsReader(paths), schema, bufferSize)
 		assert.NoError(t, err)
 		defer reader.Close()
 

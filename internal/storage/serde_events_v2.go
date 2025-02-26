@@ -79,6 +79,12 @@ func (pr *packedRecordReader) Next() (Record, error) {
 	}
 }
 
+func MakeChunkedPathsReader(paths []string) ChunkedPathsReader {
+	return func() ([]string, error) {
+		return paths, nil
+	}
+}
+
 func (pr *packedRecordReader) Close() error {
 	if pr.reader != nil {
 		pr.reader.Close()
