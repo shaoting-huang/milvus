@@ -18,7 +18,6 @@ package storage
 
 import (
 	"fmt"
-	"io"
 
 	"github.com/apache/arrow/go/v17/arrow"
 
@@ -28,71 +27,109 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 )
 
-type packedRecordReader struct {
-	reader *packed.PackedReader
+type ChunkedPathsReader func() ([]string, error)
 
-	bufferSize int64
-	schema     *schemapb.CollectionSchema
-	field2Col  map[FieldID]int
+type packedRecordReader struct {
+	pathsReader ChunkedPathsReader
+	reader      *packed.PackedReader
+
+	bufferSize  int64
+	arrowSchema *arrow.Schema
+	field2Col   map[FieldID]int
 }
 
 var _ RecordReader = (*packedRecordReader)(nil)
 
+func (pr *packedRecordReader) iterateNextBatch() error {
+	if pr.reader != nil {
+		pr.reader.Close()
+	}
+
+	paths, err := pr.pathsReader()
+	if err != nil {
+		return err
+	}
+
+	reader, err := packed.NewPackedReader(paths, pr.arrowSchema, pr.bufferSize)
+	if err != nil {
+		return merr.WrapErrParameterInvalid("New binlog record packed reader error: %s", err.Error())
+	}
+	pr.reader = reader
+	return nil
+}
+
 func (pr *packedRecordReader) Next() (Record, error) {
 	if pr.reader == nil {
-		return nil, io.EOF
+		if err := pr.iterateNextBatch(); err != nil {
+			return nil, err
+		}
 	}
-	rec, err := pr.reader.ReadNext()
-	if err != nil || rec == nil {
-		return nil, io.EOF
+
+	for {
+		rec, err := pr.reader.ReadNext()
+		if err != nil {
+			return nil, err
+		}
+		if rec != nil {
+			return NewSimpleArrowRecord(rec, pr.field2Col), nil
+		}
+		if err := pr.iterateNextBatch(); err != nil {
+			return nil, err
+		}
 	}
-	return NewSimpleArrowRecord(rec, pr.field2Col), nil
 }
 
 func (pr *packedRecordReader) Close() error {
 	if pr.reader != nil {
-		return pr.reader.Close()
+		pr.reader.Close()
 	}
 	return nil
 }
 
-func newPackedRecordReader(paths []string, schema *schemapb.CollectionSchema, bufferSize int64,
+func newPackedRecordReader(pathsReader ChunkedPathsReader, schema *schemapb.CollectionSchema, bufferSize int64,
 ) (*packedRecordReader, error) {
 	arrowSchema, err := ConvertToArrowSchema(schema.Fields)
 	if err != nil {
 		return nil, merr.WrapErrParameterInvalid("convert collection schema [%s] to arrow schema error: %s", schema.Name, err.Error())
-	}
-	reader, err := packed.NewPackedReader(paths, arrowSchema, bufferSize)
-	if err != nil {
-		return nil, merr.WrapErrParameterInvalid("New binlog record packed reader error: %s", err.Error())
 	}
 	field2Col := make(map[FieldID]int)
 	for i, field := range schema.Fields {
 		field2Col[field.FieldID] = i
 	}
 	return &packedRecordReader{
-		reader:     reader,
-		schema:     schema,
-		bufferSize: bufferSize,
-		field2Col:  field2Col,
+		pathsReader: pathsReader,
+		bufferSize:  bufferSize,
+		arrowSchema: arrowSchema,
+		field2Col:   field2Col,
 	}, nil
 }
 
-func NewPackedDeserializeReader(paths []string, schema *schemapb.CollectionSchema,
-	bufferSize int64, pkFieldID FieldID,
+func NewPackedDeserializeReader(pathsReader ChunkedPathsReader, schema *schemapb.CollectionSchema,
+	bufferSize int64,
 ) (*DeserializeReader[*Value], error) {
-	reader, err := newPackedRecordReader(paths, schema, bufferSize)
+	reader, err := newPackedRecordReader(pathsReader, schema, bufferSize)
 	if err != nil {
 		return nil, err
 	}
 
 	return NewDeserializeReader(reader, func(r Record, v []*Value) error {
+		pkField := func() *schemapb.FieldSchema {
+			for _, field := range schema.Fields {
+				if field.GetIsPrimaryKey() {
+					return field
+				}
+			}
+			return nil
+		}()
+		if pkField == nil {
+			return merr.WrapErrServiceInternal("no primary key field found")
+		}
+
 		rec, ok := r.(*simpleArrowRecord)
 		if !ok {
 			return merr.WrapErrServiceInternal("can not cast to simple arrow record")
 		}
 
-		schema := reader.schema
 		numFields := len(schema.Fields)
 		for i := 0; i < rec.Len(); i++ {
 			if v[i] == nil {
@@ -124,8 +161,8 @@ func NewPackedDeserializeReader(paths []string, schema *schemapb.CollectionSchem
 			value.ID = rowID
 			value.Timestamp = m[common.TimeStampField].(int64)
 
-			pkCol := rec.field2Col[pkFieldID]
-			pk, err := GenPrimaryKeyByRawData(m[pkFieldID], schema.Fields[pkCol].DataType)
+			pkCol := rec.field2Col[pkField.FieldID]
+			pk, err := GenPrimaryKeyByRawData(m[pkField.FieldID], schema.Fields[pkCol].DataType)
 			if err != nil {
 				return err
 			}

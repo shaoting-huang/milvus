@@ -263,10 +263,11 @@ func (node *QueryNode) InitSegcore() error {
 	C.InitExecExpressionFunctionFactory()
 
 	if paramtable.Get().CommonCfg.EnableStorageV2.GetAsBool() {
-		if err := initcore.InitStorageV2FileSystem(paramtable.Get()); err !=nil {
+		if err := initcore.InitStorageV2FileSystem(paramtable.Get()); err != nil {
 			return err
 		}
-		
+	}
+
 	return nil
 }
 

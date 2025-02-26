@@ -36,7 +36,7 @@ const (
 
 type rwOptions struct {
 	version    int64
-	bufferSize uint64
+	bufferSize int64
 	downloader func(ctx context.Context, paths []string) ([][]byte, error)
 	uploader   func(ctx context.Context, kvs map[string][]byte) error
 }
@@ -55,7 +55,7 @@ func WithVersion(version int64) RwOption {
 	}
 }
 
-func WithBufferSize(bufferSize uint64) RwOption {
+func WithBufferSize(bufferSize int64) RwOption {
 	return func(options *rwOptions) {
 		options.bufferSize = bufferSize
 	}
@@ -103,7 +103,21 @@ func NewBinlogRecordReader(ctx context.Context, binlogs []*datapb.FieldBinlog, s
 			return blobs, nil
 		})
 	case StorageV2:
-		// TODO: integrate v2
+		itr := 0
+		return newPackedRecordReader(func() ([]string, error) {
+			if len(binlogs) <= 0 {
+				return nil, sio.EOF
+			}
+			paths := make([]string, len(binlogs))
+			for i, fieldBinlog := range binlogs {
+				if itr >= len(fieldBinlog.GetBinlogs()) {
+					return nil, sio.EOF
+				}
+				paths[i] = fieldBinlog.GetBinlogs()[itr].GetLogPath()
+			}
+			itr++
+			return paths, nil
+		}, schema, rwOptions.bufferSize)
 	}
 	return nil, merr.WrapErrServiceInternal(fmt.Sprintf("unsupported storage version %d", rwOptions.version))
 }
