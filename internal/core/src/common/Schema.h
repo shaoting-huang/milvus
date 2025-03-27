@@ -27,8 +27,11 @@
 #include "pb/schema.pb.h"
 #include "Consts.h"
 
+#include "arrow/type.h"
+
 namespace milvus {
 
+using ArrowSchemaPtr = std::shared_ptr<arrow::Schema>;
 static int64_t debug_id = START_USER_FIELDID;
 
 class Schema {
@@ -220,6 +223,15 @@ class Schema {
         return fields_;
     }
 
+    const std::unordered_map<FieldId, FieldMeta>
+    get_field_metas(std::vector<FieldId> field_ids) {
+        std::unordered_map<FieldId, FieldMeta> field_metas;
+        for (const auto& field_id : field_ids) {
+            field_metas.emplace(field_id, operator[](field_id));
+        }
+        return field_metas;
+    }
+
     const std::vector<FieldId>&
     get_field_ids() const {
         return field_ids_;
@@ -242,6 +254,9 @@ class Schema {
     get_dynamic_field_id() const {
         return dynamic_field_id_opt_;
     }
+
+    const ArrowSchemaPtr
+    ConvertToArrowSchema() const;
 
  public:
     static std::shared_ptr<Schema>

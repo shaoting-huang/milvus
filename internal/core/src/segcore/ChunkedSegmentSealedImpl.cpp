@@ -28,6 +28,7 @@
 #include "Utils.h"
 #include "Types.h"
 #include "cachinglayer/Manager.h"
+#include "arrow/type_fwd.h"
 #include "common/Array.h"
 #include "common/Chunk.h"
 #include "common/ChunkWriter.h"
@@ -35,6 +36,7 @@
 #include "common/EasyAssert.h"
 #include "common/FieldData.h"
 #include "common/FieldMeta.h"
+#include "common/GroupChunk.h"
 #include "common/Json.h"
 #include "common/LoadInfo.h"
 #include "common/Tracer.h"
@@ -42,15 +44,20 @@
 #include "google/protobuf/message_lite.h"
 #include "index/VectorMemIndex.h"
 #include "mmap/ChunkedColumn.h"
+#include "mmap/ChunkedColumnGroup.h"
 #include "mmap/Types.h"
 #include "log/Log.h"
 #include "pb/schema.pb.h"
 #include "query/SearchOnSealed.h"
 #include "segcore/storagev1translator/ChunkedColumnTranslator.h"
 #include "segcore/storagev1translator/InsertRecordTranslator.h"
+#include "segcore/storagev2translator/ChunkedColumnGroupTranslator.h"
 #include "storage/Util.h"
 #include "storage/ThreadPools.h"
 #include "storage/MmapManager.h"
+
+#include "milvus-storage/format/parquet/file_reader.h"
+#include "milvus-storage/filesystem/fs.h"
 
 namespace milvus::segcore {
 
@@ -213,7 +220,32 @@ ChunkedSegmentSealedImpl::LoadScalarIndex(const LoadIndexInfo& info) {
 }
 
 void
+ChunkedSegmentSealedImpl::LoadFieldData(FieldId field_id, FieldDataInfo& data) {
+    // unsupported
+    PanicInfo(ErrorCode::NotImplemented, "LoadFieldData is not supported");
+}
+
+void
+ChunkedSegmentSealedImpl::MapFieldData(const FieldId field_id, FieldDataInfo& data) {
+    // unsupported
+    PanicInfo(ErrorCode::NotImplemented, "MapFieldData is not supported");
+}
+
+void
 ChunkedSegmentSealedImpl::LoadFieldData(const LoadFieldDataInfo& load_info) {
+    switch (load_info.storage_version) {
+        case 2:
+            load_column_group_data_internal(load_info);
+            break;
+        default:
+            load_field_data_internal(load_info);
+            break;
+    }
+}
+
+void
+ChunkedSegmentSealedImpl::load_field_data_internal(
+    const LoadFieldDataInfo& load_info) {
     size_t num_rows = storage::GetNumRowsForLoadInfo(load_info);
     AssertInfo(!num_rows_.has_value() || num_rows_ == num_rows,
                "num_rows_ is set but not equal to num_rows of LoadFieldDataInfo");
@@ -1871,6 +1903,103 @@ ChunkedSegmentSealedImpl::RemoveFieldFile(const FieldId field_id) {
             }
             return;
         }
+    }
+}
+
+void
+ChunkedSegmentSealedImpl::load_column_group_data_internal(
+    const LoadFieldDataInfo& load_info) {
+    size_t num_rows = storage::GetNumRowsForLoadInfo(load_info);
+    ArrowSchemaPtr arrow_schema = schema_->ConvertToArrowSchema();
+
+    for (auto& [id, info] : load_info.field_infos) {
+        AssertInfo(info.row_count > 0, "The row count of field data is 0");
+
+        auto column_group_id = FieldId(id);
+        auto insert_files = info.insert_files;
+        std::sort(insert_files.begin(),
+                  insert_files.end(),
+                  [](const std::string& a, const std::string& b) {
+                      return std::stol(a.substr(a.find_last_of('/') + 1)) <
+                             std::stol(b.substr(b.find_last_of('/') + 1));
+                  });
+        auto fs = milvus_storage::ArrowFileSystemSingleton::GetInstance()
+                      .GetArrowFileSystem();
+        auto file_reader =
+            std::make_shared<milvus_storage::FileRecordBatchReader>(
+                fs, insert_files[0], arrow_schema);
+        std::shared_ptr<milvus_storage::PackedFileMetadata> metadata =
+            file_reader->file_metadata();
+
+        auto field_id_mapping = metadata->GetFieldIDMapping();
+
+        std::vector<milvus_storage::RowGroupMetadataVector> row_group_meta_list;
+        for (const auto& file : insert_files) {
+            auto reader = std::make_shared<milvus_storage::FileRecordBatchReader>(
+                fs, file);
+            row_group_meta_list.push_back(reader->file_metadata()->GetRowGroupMetadataVector());
+        }
+
+        milvus_storage::FieldIDList field_ids =
+            metadata->GetGroupFieldIDList().GetFieldIDList(
+                column_group_id.get());
+        std::vector<FieldId> milvus_field_ids;
+        for (int i = 0; i < field_ids.size(); ++i) {
+            milvus_field_ids.push_back(FieldId(field_ids.Get(i)));
+        }
+
+        auto column_group_info = FieldDataInfo(
+            column_group_id.get(),
+            num_rows,
+            load_info.mmap_dir_path
+        );
+        LOG_INFO("segment {} loads column group {} with num_rows {}",
+                 this->get_segment_id(),
+                 column_group_id.get(),
+                 num_rows);
+    
+        auto field_metas = schema_->get_field_metas(milvus_field_ids);
+
+        auto translator = std::make_unique<storagev2translator::ChunkedColumnGroupTranslator>(
+            get_segment_id(),
+            field_metas,
+            column_group_info,
+            insert_files,
+            info.enable_mmap ? milvus::cachinglayer::StorageType::FILE_MMAP
+                    : milvus::cachinglayer::StorageType::MEMORY,
+            row_group_meta_list,
+            field_ids);
+
+        // std::shared_ptr<milvus::cachinglayer::CacheSlot<milvus::GroupChunk>>
+        //         slot = milvus::cachinglayer::Manager::GetInstance()
+        //                    .CreateCacheSlot(std::move(translator));
+        
+        // // For each cell (row group)
+        // std::vector<std::shared_ptr<GroupChunk>> group_chunks;
+        // for (const auto& [cid, column_group] : cells) {
+        //     group_chunks.push_back(std::make_shared<GroupChunk>(*column_group));
+        // }
+        // auto chunked_column_group = std::make_shared<ChunkedColumnGroup>(group_chunks);
+            
+        // // Create ProxyChunkColumn for each field in this column group
+        // for (const auto& field_id : milvus_field_ids) {
+        //     auto field_meta = field_metas.at(field_id);
+        //     auto proxy_column = std::make_shared<ProxyChunkColumn>(
+        //         chunked_column_group, field_id, field_meta);
+        //     fields_.emplace(field_id, proxy_column);
+        // }
+
+        // for (auto field_id : milvus_field_ids) {
+        //     if (generate_interim_index(field_id)) {
+        //         std::unique_lock lck(mutex_);
+        //         // mmap_fields is useless, no change
+        //         fields_.erase(field_id);
+        //         set_bit(field_data_ready_bitset_, field_id, false);
+        //     } else {
+        //         std::unique_lock lck(mutex_);
+        //         set_bit(field_data_ready_bitset_, field_id, true);
+        //     }
+        // }
     }
 }
 

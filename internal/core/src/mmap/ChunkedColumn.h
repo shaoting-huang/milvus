@@ -84,7 +84,7 @@ class ChunkedColumnBase : public ColumnBase {
         return chunks_[0]->RawData();
     }
 
-    bool
+    virtual bool
     IsValid(size_t offset) const {
         if (nullable_) {
             auto [chunk_id, offset_in_chunk] = GetChunkIDByOffset(offset);
@@ -93,7 +93,7 @@ class ChunkedColumnBase : public ColumnBase {
         return true;
     }
 
-    bool
+    virtual bool
     IsValid(int64_t chunk_id, int64_t offset) const {
         if (nullable_) {
             return chunks_[chunk_id]->isValid(offset);
@@ -101,17 +101,17 @@ class ChunkedColumnBase : public ColumnBase {
         return true;
     }
 
-    bool
+    virtual bool
     IsNullable() const {
         return nullable_;
     }
 
-    size_t
+    virtual size_t
     NumRows() const {
         return num_rows_;
     };
 
-    int64_t
+    virtual int64_t
     num_chunks() const {
         return chunks_.size();
     }
@@ -132,7 +132,7 @@ class ChunkedColumnBase : public ColumnBase {
         return size;
     }
 
-    int64_t
+    virtual int64_t
     chunk_row_nums(int64_t chunk_id) const {
         return chunks_[chunk_id]->RowNums();
     }
@@ -168,7 +168,7 @@ class ChunkedColumnBase : public ColumnBase {
                   "viewsbyoffsets only supported for VariableColumn");
     }
 
-    std::pair<size_t, size_t>
+    virtual std::pair<size_t, size_t>
     GetChunkIDByOffset(int64_t offset) const {
         AssertInfo(offset < num_rows_,
                    "offset {} is out of range, num_rows: {}",
@@ -184,17 +184,17 @@ class ChunkedColumnBase : public ColumnBase {
         return {chunk_idx, offset_in_chunk};
     }
 
-    std::shared_ptr<Chunk>
+    virtual std::shared_ptr<Chunk>
     GetChunk(int64_t chunk_id) const {
         return chunks_[chunk_id];
     }
 
-    int64_t
+    virtual int64_t
     GetNumRowsUntilChunk(int64_t chunk_id) const {
         return num_rows_until_chunk_[chunk_id];
     }
 
-    const std::vector<int64_t>&
+    virtual const std::vector<int64_t>&
     GetNumRowsUntilChunk() const {
         return num_rows_until_chunk_;
     }

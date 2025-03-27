@@ -17,16 +17,23 @@
 #include <string>
 #include <vector>
 
+#include "arrow/type.h"
 #include "common/Common.h"
+#include "common/Types.h"
 #include "common/FieldData.h"
 #include "common/Types.h"
 #include "index/ScalarIndex.h"
+#include "milvus-storage/common/metadata.h"
+#include "milvus-storage/common/type_fwd.h"
+#include "milvus-storage/format/parquet/file_reader.h"
+#include "milvus-storage/filesystem/fs.h"
 #include "mmap/Utils.h"
 #include "log/Log.h"
 #include "storage/DataCodec.h"
 #include "storage/RemoteChunkManagerSingleton.h"
 #include "storage/ThreadPools.h"
 #include "storage/Util.h"
+#include "segcore/memory_planner.h"
 
 namespace milvus::segcore {
 
@@ -925,6 +932,88 @@ LoadArrowReaderFromRemote(const std::vector<std::string>& remote_files,
     }
 }
 
+// init segcore storage config first, and create default arrow file system
+// segcore use storage v2 file reader to load data from minio/s3
+void
+LoadArrowReaderFromStorageV2(const std::vector<std::string>& remote_files,
+                             std::shared_ptr<ArrowReaderChannel> channel,
+                             int64_t memory_limit,
+                             uint64_t parallel_degree,
+                             const std::vector<std::vector<int64_t>>& row_group_lists) {
+    try {
+        AssertInfo(remote_files.size() == row_group_lists.size(), 
+                  "Number of remote files must match number of row group lists");
+                  
+        auto fs = milvus_storage::ArrowFileSystemSingleton::GetInstance()
+                      .GetArrowFileSystem();
+        auto& pool = ThreadPools::GetThreadPool(ThreadPoolPriority::HIGH);
+
+        for (size_t file_idx = 0; file_idx < remote_files.size(); ++file_idx) {
+            const auto& file = remote_files[file_idx];
+            const auto& row_groups = row_group_lists[file_idx];
+            std::vector<int64_t> sorted_row_groups = row_groups;
+            std::sort(sorted_row_groups.begin(), sorted_row_groups.end());
+            
+            auto file_reader =
+                std::make_shared<milvus_storage::FileRecordBatchReader>(
+                    fs, file, memory_limit);
+            auto metadata = file_reader->file_metadata();
+            milvus_storage::RowGroupMetadataVector row_group_metadatas =
+                metadata->GetRowGroupMetadataVector();
+            auto field_id_mapping = metadata->GetFieldIDMapping();
+            
+            auto blocks = split_row_groups(sorted_row_groups, row_group_metadatas);
+            
+            std::vector<std::future<std::shared_ptr<milvus::ArrowDataWrapper>>>
+                futures;
+            futures.reserve(blocks.size());
+
+            for (const auto& block : blocks) {
+                futures.emplace_back(pool.Submit([=]() {
+                    std::cout << "Loading row group " << block.offset << " to " << block.offset + block.count << std::endl;
+                    auto row_group_reader = std::make_shared<
+                        milvus_storage::FileRecordBatchReader>(
+                        fs, file, nullptr, memory_limit);
+                    row_group_reader->SetRowGroupOffsetAndCount(block.offset, block.count);
+                    
+                    auto ret = std::make_shared<ArrowDataWrapper>();
+                    std::vector<std::shared_ptr<arrow::RecordBatch>> batches;
+                    for (auto batch : *row_group_reader) {
+                        batches.push_back(batch.ValueOrDie());
+                    }
+                    
+                    // Concatenate all batches
+                    auto concatenated = arrow::ConcatenateRecordBatches(batches);
+                    AssertInfo(concatenated.ok(), "Failed to concatenate batches");
+                    auto big_batch = concatenated.ValueOrDie();
+                    
+                    // Slice according to row group metadata, only keep the row groups we want
+                    size_t offset = 0;
+                    for (size_t row_group = block.offset; row_group < block.offset + block.count; ++row_group) {
+                        const auto& meta = row_group_metadatas.Get(row_group);
+                        size_t row_num = meta.row_num();
+                        auto sliced = big_batch->Slice(offset, row_num);
+                        ret->record_batches.push_back(sliced);
+                        offset += row_num;
+                    }
+                    
+                    return ret;
+                }));
+            }
+
+            for (auto& future : futures) {
+                auto field_data = future.get();
+                channel->push(field_data);
+            }
+        }
+
+        channel->close();
+    } catch (std::exception& e) {
+        LOG_INFO("failed to load data from remote: {}", e.what());
+        channel->close();
+    }
+}
+
 void
 LoadFieldDatasFromRemote(const std::vector<std::string>& remote_files,
                          FieldDataChannelPtr channel) {
@@ -957,6 +1046,7 @@ LoadFieldDatasFromRemote(const std::vector<std::string>& remote_files,
         channel->close(std::current_exception());
     }
 }
+
 int64_t
 upper_bound(const ConcurrentVector<Timestamp>& timestamps,
             int64_t first,
@@ -973,4 +1063,5 @@ upper_bound(const ConcurrentVector<Timestamp>& timestamps,
     }
     return first;
 }
+
 }  // namespace milvus::segcore

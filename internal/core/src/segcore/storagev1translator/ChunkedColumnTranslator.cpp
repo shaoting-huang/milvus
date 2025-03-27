@@ -118,13 +118,14 @@ ChunkedColumnTranslator::load_column_in_memory() const {
     }
     std::shared_ptr<milvus::ArrowDataWrapper> r;
     while (field_data_info_.arrow_reader_channel->pop(r)) {
+        arrow::ArrayVector array_vec = read_single_column_batches(r->reader);
         auto chunk =
             create_chunk(field_meta_,
                          IsVectorDataType(data_type) &&
                                  !IsSparseFloatVectorDataType(data_type)
                              ? field_meta_.get_dim()
                              : 1,
-                         r->reader);
+                         array_vec);
         column->AddChunk(chunk);
     }
     AssertInfo(column->NumRows() == field_data_info_.row_count,
@@ -156,6 +157,7 @@ ChunkedColumnTranslator::load_column_in_mmap() const {
     size_t file_offset = 0;
     std::vector<std::shared_ptr<Chunk>> chunks;
     while (field_data_info_.arrow_reader_channel->pop(r)) {
+        arrow::ArrayVector array_vec = read_single_column_batches(r->reader);
         auto chunk =
             create_chunk(field_meta_,
                          IsVectorDataType(data_type) &&
@@ -164,7 +166,7 @@ ChunkedColumnTranslator::load_column_in_mmap() const {
                              : 1,
                          file,
                          file_offset,
-                         r->reader);
+                         array_vec);
         file_offset += chunk->Size();
         chunks.push_back(chunk);
     }
