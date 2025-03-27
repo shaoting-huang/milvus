@@ -27,6 +27,7 @@
 #include "SealedIndexingRecord.h"
 #include "SegmentSealed.h"
 #include "common/EasyAssert.h"
+#include "common/LoadInfo.h"
 #include "google/protobuf/message_lite.h"
 #include "mmap/ChunkedColumn.h"
 #include "mmap/Types.h"
@@ -35,6 +36,7 @@
 #include "cachinglayer/CacheSlot.h"
 #include "cachinglayer/CacheSlot.h"
 #include "cachinglayer/Utils.h"
+#include "segcore/storagev2translator/GroupChunkTranslator.h"
 
 namespace milvus::segcore {
 
@@ -76,6 +78,16 @@ class ChunkedSegmentSealedImpl : public SegmentSealed {
         return pin_insert_record()->get_cell_of(0)->contain(pk);
     }
 
+    // void
+    // LoadColumnGroupData(FieldId column_group_id,
+    //                     FieldDataInfo& data,
+    //                     milvus_storage::FieldIDList field_ids,
+    //                     bool use_mmap) override;
+
+    void
+    LoadFieldData(FieldId field_id, FieldDataInfo& data) override;
+    void
+    MapFieldData(const FieldId field_id, FieldDataInfo& data) override;
     void
     AddFieldDataInfoForSealed(
         const LoadFieldDataInfo& field_data_info) override;
@@ -101,10 +113,40 @@ class ChunkedSegmentSealedImpl : public SegmentSealed {
     LoadTextIndex(FieldId field_id,
                   std::unique_ptr<index::TextMatchIndex> index) override;
 
+    void
+    load_field_data_internal(const LoadFieldDataInfo& load_info);
+
+    void
+    load_column_group_data_internal(const LoadFieldDataInfo& load_info);
+
+    void
+    load_column_in_memory(FieldId field_id,
+                          std::vector<arrow::ArrayVector> chunks,
+                          int64_t num_rows);
+
+    std::shared_ptr<ChunkedColumnInterface>
+    load_variable_datatype_column(FieldId field_id,
+                                  milvus::DataType data_type,
+                                  const FieldMeta& field_meta,
+                                  std::vector<arrow::ArrayVector>& chunks,
+                                  int64_t& field_data_size,
+                                  SegmentStats& stats);
+
+    void
+    load_field_data_mmap(const FieldId field_id,
+                         size_t row_count,
+                         std::string mmap_dir_path,
+                         std::vector<arrow::ArrayVector> array_vec_chunks);
+
  public:
     size_t
     GetMemoryUsageInBytes() const override {
         return stats_.mem_size.load() + deleted_record_->mem_size();
+    }
+
+    InsertRecord<true>&
+    get_insert_record() override {
+        return *pin_insert_record()->get_cell_of(0);
     }
 
     int64_t
@@ -258,7 +300,7 @@ class ChunkedSegmentSealedImpl : public SegmentSealed {
 
     template <typename S, typename T = S>
     static void
-    bulk_subscript_impl(ChunkedColumnBase* field,
+    bulk_subscript_impl(ChunkedColumnInterface* field,
                         const int64_t* seg_offsets,
                         int64_t count,
                         T* dst_raw);
@@ -266,28 +308,28 @@ class ChunkedSegmentSealedImpl : public SegmentSealed {
     // 这个好像从来没有调用
     // template <typename S, typename T = S>
     // static void
-    // bulk_subscript_impl(ChunkedColumnBase* field,
+    // bulk_subscript_impl(ChunkedColumnInterface* field,
     //                     const int64_t* seg_offsets,
     //                     int64_t count,
     //                     void* dst_raw);
 
     template <typename S, typename T = S>
     static void
-    bulk_subscript_ptr_impl(ChunkedColumnBase* field,
+    bulk_subscript_ptr_impl(ChunkedColumnInterface* field,
                             const int64_t* seg_offsets,
                             int64_t count,
                             google::protobuf::RepeatedPtrField<T>* dst_raw);
 
     template <typename T>
     static void
-    bulk_subscript_array_impl(ChunkedColumnBase* column,
+    bulk_subscript_array_impl(ChunkedColumnInterface* column,
                               const int64_t* seg_offsets,
                               int64_t count,
                               google::protobuf::RepeatedPtrField<T>* dst);
 
     static void
     bulk_subscript_impl(int64_t element_sizeof,
-                        ChunkedColumnBase* field,
+                        ChunkedColumnInterface* field,
                         const int64_t* seg_offsets,
                         int64_t count,
                         void* dst_raw);
@@ -344,6 +386,9 @@ class ChunkedSegmentSealedImpl : public SegmentSealed {
     bool
     generate_interim_index(const FieldId field_id);
 
+    void load_column_group_data_internal(
+        const std::vector<FieldDataInfo>& field_data_infos);
+
  private:
     // InsertRecord needs to pin pk column.
     friend class storagev1translator::InsertRecordTranslator;
@@ -384,7 +429,7 @@ class ChunkedSegmentSealedImpl : public SegmentSealed {
     SchemaPtr schema_;
     int64_t id_;
     // TODO(tiered storage 1): 检查所有删除了const标记的方法，也许应该把改动的缓存成员改成mutable。
-    mutable std::unordered_map<FieldId, std::shared_ptr<ChunkedColumnBase>>
+    mutable std::unordered_map<FieldId, std::shared_ptr<ChunkedColumnInterface>>
         fields_;
     std::unordered_set<FieldId> mmap_fields_;
 
@@ -403,6 +448,12 @@ class ChunkedSegmentSealedImpl : public SegmentSealed {
     // whether the segment is sorted by the pk
     // 1. will skip index loading for primary key field
     bool is_sorted_by_pk_ = false;
+
+    std::vector<std::string> insert_files_;
+    milvus::cachinglayer::StorageType storage_type_;
+    std::shared_ptr<arrow::Schema> arrow_schema_;
+    std::unordered_map<FieldId, FieldMeta> field_metas_;
+    int64_t segment_id_;
 };
 
 inline SegmentSealedUPtr

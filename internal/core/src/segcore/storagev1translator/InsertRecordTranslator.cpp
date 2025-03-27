@@ -90,7 +90,8 @@ InsertRecordTranslator::get_cells(
 
     std::shared_ptr<milvus::ArrowDataWrapper> r;
     while (field_data_info_.arrow_reader_channel->pop(r)) {
-        auto chunk = create_chunk(field_meta, 1, r->reader);
+        arrow::ArrayVector array_vec = read_single_column_batches(r->reader);
+        auto chunk = create_chunk(field_meta, 1, array_vec);
         auto chunk_ptr = static_cast<FixedWidthChunk*>(chunk.get());
         std::copy_n(static_cast<const Timestamp*>(chunk_ptr->Span().data()),
                     chunk_ptr->Span().row_count(),

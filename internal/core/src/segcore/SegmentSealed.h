@@ -22,6 +22,8 @@
 #include "segcore/SegmentInterface.h"
 #include "segcore/Types.h"
 
+#include "milvus-storage/common/type_fwd.h"
+
 namespace milvus::segcore {
 
 class SegmentSealed : public SegmentInternalInterface {
@@ -35,6 +37,15 @@ class SegmentSealed : public SegmentInternalInterface {
     virtual void
     DropFieldData(const FieldId field_id) = 0;
 
+    // virtual void
+    // LoadColumnGroupData(FieldId column_group_id,
+    //                     FieldDataInfo& data,
+    //                     milvus_storage::FieldIDList field_ids,
+    //                     bool use_mmap) = 0;
+    virtual void
+    LoadFieldData(FieldId field_id, FieldDataInfo& data) = 0;
+    virtual void
+    MapFieldData(const FieldId field_id, FieldDataInfo& data) = 0;
     virtual void
     AddFieldDataInfoForSealed(const LoadFieldDataInfo& field_data_info) = 0;
     virtual void
@@ -47,6 +58,8 @@ class SegmentSealed : public SegmentInternalInterface {
     virtual void
     LoadTextIndex(FieldId field_id,
                   std::unique_ptr<index::TextMatchIndex> index) = 0;
+    virtual InsertRecord<true>&
+    get_insert_record() = 0;
 
     virtual index::IndexBase*
     GetJsonIndex(FieldId field_id, std::string path) const override {

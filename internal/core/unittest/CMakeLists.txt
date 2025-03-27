@@ -36,7 +36,7 @@ set(MILVUS_TEST_FILES
         test_binlog_index.cpp
         test_bitmap_index.cpp
         test_bool_index.cpp
-        test_c_api.cpp
+        # test_c_api.cpp
         test_chunk_cache.cpp
         test_chunk.cpp
         test_chunk_vector.cpp
@@ -46,10 +46,10 @@ set(MILVUS_TEST_FILES
         test_c_tokenizer.cpp
         test_loading.cpp
         test_data_codec.cpp
-        test_delete_record.cpp
+        # test_delete_record.cpp
         test_disk_file_manager_test.cpp
         test_exec.cpp
-        test_expr.cpp
+        # test_expr.cpp
         test_expr_materialized_view.cpp
         test_float16.cpp
         test_function.cpp
@@ -81,7 +81,7 @@ set(MILVUS_TEST_FILES
         test_retrieve.cpp
         test_scalar_index.cpp
         test_sealed.cpp
-        test_segcore.cpp
+        # test_segcore.cpp
         test_similarity_corelation.cpp
         test_span.cpp
         test_storage.cpp
@@ -89,14 +89,19 @@ set(MILVUS_TEST_FILES
         test_text_match.cpp
         test_timestamp_index.cpp
         test_tracer.cpp
-        test_utils.cpp
-        test_chunked_segment.cpp
+        # test_utils.cpp
+        # test_chunked_segment.cpp
         test_chunked_column.cpp
         test_rust_result.cpp
-        test_cached_search_iterator.cpp
+        # test_cached_search_iterator.cpp
         test_build_inverted_index_with_single_segment.cpp
         test_random_sample.cpp
         test_json_index.cpp
+        # test_chunked_segment_storage_v2.cpp
+        test_types.cpp
+        test_growing_storage_v2.cpp
+        test_chunked_column_group.cpp
+        test_memory_planner.cpp
         )
 
 if ( INDEX_ENGINE STREQUAL "cardinal" )

@@ -19,7 +19,7 @@
 #include "common/Tracer.h"
 #include "index/IndexFactory.h"
 #include "knowhere/version.h"
-
+#include "milvus-storage/common/metadata.h"
 #include "storage/MmapManager.h"
 #include "storage/MinioChunkManager.h"
 #include "storage/RemoteChunkManagerSingleton.h"

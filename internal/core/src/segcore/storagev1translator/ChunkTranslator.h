@@ -10,10 +10,6 @@
 
 namespace milvus::segcore::storagev1translator {
 
-struct CTMeta : public milvus::cachinglayer::Meta {
-    std::vector<int64_t> num_rows_until_chunk_;
-};
-
 // This class will load all cells(Chunks) in ctor, and move them out during get_cells.
 // This should be used only in storagev1(no eviction allowed), thus trying to get a
 // same cell a second time will result in exception.
@@ -54,7 +50,7 @@ class ChunkTranslator : public milvus::cachinglayer::Translator<milvus::Chunk> {
     std::string key_;
     milvus::cachinglayer::StorageType storage_type_;
     std::vector<milvus::Chunk*> chunks_;
-    CTMeta meta_;
+    milvus::cachinglayer::CTMeta meta_;
 };
 
 }  // namespace milvus::segcore::storagev1translator

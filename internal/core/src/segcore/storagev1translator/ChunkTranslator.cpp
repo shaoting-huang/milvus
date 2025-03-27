@@ -47,13 +47,14 @@ ChunkTranslator::ChunkTranslator(int64_t segment_id,
     if (storage_type_ == milvus::cachinglayer::StorageType::MEMORY) {
         std::shared_ptr<milvus::ArrowDataWrapper> r;
         while (field_data_info.arrow_reader_channel->pop(r)) {
+            auto array_vec = read_single_column_batches(r->reader);
             auto chunk =
                 create_chunk(field_meta,
                             IsVectorDataType(data_type) &&
                                     !IsSparseFloatVectorDataType(data_type)
                                 ? field_meta.get_dim()
                                 : 1,
-                            r->reader).release();
+                            array_vec).release();
             chunks_[cid] = chunk;
             row_count += chunk->RowNums();
             meta_.num_rows_until_chunk_.push_back(row_count);
@@ -72,6 +73,7 @@ ChunkTranslator::ChunkTranslator(int64_t segment_id,
         size_t file_offset = 0;
         std::vector<std::shared_ptr<Chunk>> chunks;
         while (field_data_info.arrow_reader_channel->pop(r)) {
+            auto array_vec = read_single_column_batches(r->reader);
             auto chunk =
                 create_chunk(field_meta,
                             IsVectorDataType(data_type) &&
@@ -80,7 +82,7 @@ ChunkTranslator::ChunkTranslator(int64_t segment_id,
                                 : 1,
                             file,
                             file_offset,
-                            r->reader).release();
+                            array_vec).release();
             chunks_[cid] = chunk;
             row_count += chunk->RowNums();
             meta_.num_rows_until_chunk_.push_back(row_count);

@@ -1,0 +1,282 @@
+// Licensed to the LF AI & Data foundation under one
+// or more contributor license agreements. See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership. The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+#include "segcore/storagev2translator/GroupChunkTranslator.h"
+#include "common/GroupChunk.h"
+
+#include "mmap/Types.h"
+#include "common/Types.h"
+#include "milvus-storage/common/metadata.h"
+#include "milvus-storage/filesystem/fs.h"
+#include "storage/ThreadPools.h"
+#include "segcore/Utils.h"
+#include "segcore/memory_planner.h"
+
+#include <string>
+#include <vector>
+#include <unordered_map>
+
+#include "arrow/type.h"
+#include "arrow/type_fwd.h"
+#include "cachinglayer/Utils.h"
+#include "common/ChunkWriter.h"
+
+namespace milvus::segcore::storagev2translator {
+
+GroupChunkTranslator::GroupChunkTranslator(
+    int64_t segment_id,
+    const std::unordered_map<FieldId, FieldMeta>& field_metas,
+    FieldDataInfo column_group_info,
+    std::vector<std::string> insert_files,
+    milvus::cachinglayer::StorageType storage_type,
+    std::vector<milvus_storage::RowGroupMetadataVector>& row_group_meta_list,
+    milvus_storage::FieldIDList field_id_list)
+    : segment_id_(segment_id),
+      key_(fmt::format("seg_{}_cg_{}", segment_id, column_group_info.field_id)),
+      field_metas_(field_metas),
+      column_group_info_(column_group_info),
+      insert_files_(insert_files),
+      storage_type_(storage_type),
+      row_group_meta_list_(row_group_meta_list),
+      field_id_list_(field_id_list) {
+    AssertInfo(insert_files_.size() == row_group_meta_list_.size(), 
+              "Number of insert files must match number of row group metas");
+    std::vector<std::vector<int64_t>> row_group_lists;
+    row_group_lists.reserve(insert_files.size());
+    std::vector<std::vector<int64_t>> file_row_groups(row_group_meta_list_.size());
+    for (const auto& row_group_meta : row_group_meta_list_) {
+        auto row_group_num = row_group_meta.size();
+        std::vector<int64_t> all_row_groups(row_group_num);
+        std::iota(all_row_groups.begin(), all_row_groups.end(), 0);
+        row_group_lists.push_back(all_row_groups);
+    }
+    auto parallel_degree =
+        static_cast<uint64_t>(DEFAULT_FIELD_MAX_MEMORY_LIMIT / FILE_SLICE_SIZE);
+    // create parallel degree split strategy
+    auto strategy =
+        std::make_unique<ParallelDegreeSplitStrategy>(parallel_degree);
+
+    auto& pool =
+            ThreadPools::GetThreadPool(milvus::ThreadPoolPriority::MIDDLE);
+    
+    auto fs = milvus_storage::ArrowFileSystemSingleton::GetInstance()
+                  .GetArrowFileSystem();
+    auto load_future = pool.Submit([&]() {
+        return LoadWithStrategy(insert_files,
+                                column_group_info.arrow_reader_channel,
+                                DEFAULT_FIELD_MAX_MEMORY_LIMIT,
+                                std::move(strategy),
+                                row_group_lists);
+    });
+
+    LOG_INFO("segment {} submits load column group {} with fields {} task to thread pool",
+             segment_id_,
+             column_group_info_.field_id,
+             field_id_list_.ToString());
+    if (storage_type_ == cachinglayer::StorageType::MEMORY) {
+        load_column_group_in_memory();
+    } else {
+        load_column_group_in_mmap();
+    }
+}
+
+GroupChunkTranslator::~GroupChunkTranslator() {
+    for (auto chunk : group_chunks_) {
+        if (chunk != nullptr) {
+            // let the GroupChunk to be deleted by the unique_ptr
+            auto chunk_ptr = std::unique_ptr<GroupChunk>(chunk);
+        }
+    }
+}
+
+
+size_t GroupChunkTranslator::num_cells() const {
+    size_t total_row_groups = 0;
+    for (const auto& row_group_meta : row_group_meta_list_) {
+        total_row_groups += row_group_meta.size();
+    }
+    return total_row_groups;
+}
+
+milvus::cachinglayer::cid_t 
+GroupChunkTranslator::cell_id_of(milvus::cachinglayer::uid_t uid) const {
+    size_t current_offset = 0;
+    size_t total_row_groups = 0;
+    
+    for (size_t file_idx = 0; file_idx < row_group_meta_list_.size(); ++file_idx) {
+        const auto& file_metas = row_group_meta_list_[file_idx];
+        for (size_t rg_idx = 0; rg_idx < file_metas.size(); ++rg_idx) {
+            const auto& meta = file_metas.Get(rg_idx);
+            if (uid >= current_offset && uid < current_offset + meta.row_num()) {
+                return total_row_groups + rg_idx;
+            }
+            current_offset += meta.row_num();
+        }
+        total_row_groups += file_metas.size();
+    }
+    return 0;
+}
+
+milvus::cachinglayer::StorageType 
+GroupChunkTranslator::storage_type() const {
+    return storage_type_;
+}
+
+size_t GroupChunkTranslator::estimated_byte_size_of_cell(
+    milvus::cachinglayer::cid_t cid) const {
+    auto [file_idx, row_group_idx] = get_file_and_row_group_index(cid);
+    auto& row_group_meta = row_group_meta_list_[file_idx].Get(row_group_idx);
+    return row_group_meta.memory_size();
+}
+
+const std::string& GroupChunkTranslator::key() const {
+    return key_;
+}
+
+std::pair<size_t, size_t>
+GroupChunkTranslator::get_file_and_row_group_index(milvus::cachinglayer::cid_t cid) const {
+    size_t file_idx = 0;
+    size_t remaining_cid = cid;
+    
+    for (; file_idx < row_group_meta_list_.size(); ++file_idx) {
+        const auto& file_metas = row_group_meta_list_[file_idx];
+        if (remaining_cid < file_metas.size()) {
+            return {file_idx, remaining_cid};
+        }
+        remaining_cid -= file_metas.size();
+    }
+    
+    return {0, 0}; // Default to first file and first row group if not found
+}
+
+std::vector<std::pair<cachinglayer::cid_t,
+                     std::unique_ptr<milvus::GroupChunk>>>
+GroupChunkTranslator::get_cells(
+    const std::vector<cachinglayer::cid_t>& cids) {
+    std::vector<
+        std::pair<milvus::cachinglayer::cid_t, std::unique_ptr<milvus::GroupChunk>>>
+        cells;
+    for (auto cid : cids) {
+        AssertInfo(group_chunks_[cid] != nullptr,
+                   "GroupChunkTranslator::get_cells called again on cell {} of "
+                   "CacheSlot {}.",
+                   cid,
+                   key_);
+        cells.emplace_back(cid, std::unique_ptr<milvus::GroupChunk>(group_chunks_[cid]));
+        group_chunks_[cid] = nullptr;
+    }
+    return cells;
+}
+
+void
+GroupChunkTranslator::load_column_group_in_memory() {
+    std::vector<size_t> row_counts;
+    for (size_t i = 0; i < field_id_list_.size(); ++i) {
+        row_counts.push_back(0);
+    }
+    std::shared_ptr<milvus::ArrowDataWrapper> r;
+    size_t batch_idx = 0;
+    while (column_group_info_.arrow_reader_channel->pop(r)) {
+        for (const auto& table : r->arrow_tables) {
+            size_t batch_num_rows = table->num_rows();
+            // Create chunks for each field in this batch
+            std::unordered_map<FieldId, std::shared_ptr<Chunk>> chunks;
+            
+            // Iterate through field_id_list to get field_id and create chunk
+            for (size_t i = 0; i < field_id_list_.size(); ++i) {
+                auto field_id = field_id_list_.Get(i);
+                auto fid = milvus::FieldId(field_id);
+                auto it = field_metas_.find(fid);
+                AssertInfo(it != field_metas_.end(), "Field id not found in field_metas");
+                const auto& field_meta = it->second;
+                
+                auto dim = IsVectorDataType(field_meta.get_data_type()) &&
+                          !IsSparseFloatVectorDataType(field_meta.get_data_type())
+                          ? field_meta.get_dim()
+                          : 1;
+                arrow::ArrayVector array_vec;
+                for (const auto& array : table->column(i)->chunks()) {
+                    array_vec.push_back(array);
+                }
+                auto chunk = create_chunk(field_meta, dim, array_vec);
+                row_counts[i] += chunk->RowNums();
+                metas_[fid].num_rows_until_chunk_.push_back(row_counts[i]);
+                chunks[fid] = std::make_shared<Chunk>(chunk.get());
+            }
+            
+            // Create GroupChunk from chunks and store in results
+            auto group_chunk = std::make_unique<milvus::GroupChunk>(std::move(chunks));
+            group_chunks_.emplace_back(group_chunk.release());
+        }
+    }
+}
+
+void
+GroupChunkTranslator::load_column_group_in_mmap() {
+    std::vector<std::shared_ptr<File>> files;
+    std::vector<size_t> file_offsets;
+    std::vector<size_t> row_counts;
+    for (size_t i = 0; i < field_id_list_.size(); ++i) {
+        auto field_id = field_id_list_.Get(i);
+        auto filepath = std::filesystem::path(column_group_info_.mmap_dir_path) /
+                std::to_string(segment_id_) /
+                std::to_string(field_id);
+        auto dir = filepath.parent_path();
+        std::filesystem::create_directories(dir);
+        auto file = std::make_shared<File>(File::Open(filepath.string(), O_CREAT | O_TRUNC | O_RDWR));
+        files.push_back(std::move(file));
+        file_offsets.push_back(0);
+        row_counts.push_back(0);
+    }
+    
+    std::shared_ptr<milvus::ArrowDataWrapper> r;
+    size_t batch_idx = 0;
+    while (column_group_info_.arrow_reader_channel->pop(r)) {
+        for (const auto& table : r->arrow_tables) {
+            size_t batch_num_rows = table->num_rows();
+            // Create chunks for each field in this batch
+            std::unordered_map<FieldId, std::shared_ptr<Chunk>> chunks;
+            
+            // Iterate through field_id_list to get field_id and create chunk
+            for (size_t i = 0; i < field_id_list_.size(); ++i) {
+                auto field_id = field_id_list_.Get(i);
+                auto fid = milvus::FieldId(field_id);
+                auto it = field_metas_.find(fid);
+                AssertInfo(it != field_metas_.end(), "Field id not found in field_metas");
+                const auto& field_meta = it->second;
+                
+                auto dim = IsVectorDataType(field_meta.get_data_type()) &&
+                          !IsSparseFloatVectorDataType(field_meta.get_data_type())
+                          ? field_meta.get_dim()
+                          : 1;
+                arrow::ArrayVector array_vec;
+                for (const auto& array : table->column(i)->chunks()) {
+                    array_vec.push_back(array);
+                }
+                auto chunk = create_chunk(field_meta, dim, *files[i], file_offsets[i], array_vec);
+                row_counts[i] += chunk->RowNums();
+                metas_[fid].num_rows_until_chunk_.push_back(row_counts[i]);
+                file_offsets[i] += chunk->Size();
+                chunks[fid] = std::make_shared<Chunk>(chunk.get());
+            }
+            
+            // Create GroupChunk from chunks and store in results
+            auto group_chunk = std::make_unique<milvus::GroupChunk>(std::move(chunks));
+            group_chunks_.emplace_back(group_chunk.release());
+        }
+    }
+}
+
+}  // namespace milvus::segcore::storagev2translator

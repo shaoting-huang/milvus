@@ -38,12 +38,13 @@
 #include "common/Span.h"
 #include "common/Array.h"
 #include "segcore/storagev1translator/ChunkTranslator.h"
-
+#include "cachinglayer/Translator.h"
+#include "mmap/ChunkedColumnInterface.h"
 namespace milvus {
 
 using namespace milvus::cachinglayer;
 
-class ChunkedColumnBase {
+class ChunkedColumnBase : public ChunkedColumnInterface {
  public:
     // memory mode ctor
     explicit ChunkedColumnBase(std::unique_ptr<Translator<Chunk>> translator,
@@ -57,49 +58,40 @@ class ChunkedColumnBase {
     virtual ~ChunkedColumnBase() = default;
 
     PinWrapper<const char*>
-    DataOfChunk(int chunk_id) {
+    DataOfChunk(int chunk_id) const override {
         auto ca = SemiInlineGet(slot_->PinCells({chunk_id}));
         auto chunk = ca->get_cell_of(chunk_id);
         return PinWrapper<const char*>(ca, chunk->Data());
     }
 
     bool
-    IsValid(size_t offset) {
+    IsValid(size_t offset) const override {
         if (!nullable_) {
             return true;
         }
         auto [chunk_id, offset_in_chunk] = GetChunkIDByOffset(offset);
-        return IsValid(chunk_id, offset_in_chunk);
+        auto ca = SemiInlineGet(slot_->PinCells({static_cast<cid_t>(chunk_id)}));
+        auto chunk = ca->get_cell_of(chunk_id);
+        return chunk->isValid(offset_in_chunk);
     }
 
     bool
-    IsValid(int64_t chunk_id, int64_t offset) {
-        if (nullable_) {
-            auto ca =
-                SemiInlineGet(slot_->PinCells({static_cast<cid_t>(chunk_id)}));
-            auto chunk = ca->get_cell_of(chunk_id);
-            return chunk->isValid(offset);
-        }
-        return true;
-    }
-
-    bool
-    IsNullable() const {
+    IsNullable() const override {
         return nullable_;
     }
 
     size_t
-    NumRows() const {
+    NumRows() const override {
         return num_rows_;
     };
 
     int64_t
-    num_chunks() const {
+    num_chunks() const override {
         return num_chunks_;
     }
 
     size_t
-    DataByteSize() const {
+    DataByteSize() const override {
         auto size = 0;
         for (auto i = 0; i < num_chunks_; i++) {
             size += slot_->size_of_cell(i);
@@ -108,41 +100,14 @@ class ChunkedColumnBase {
     }
 
     int64_t
-    chunk_row_nums(int64_t chunk_id) {
+    chunk_row_nums(int64_t chunk_id) const override {
         auto ca = SemiInlineGet(slot_->PinCells({chunk_id}));
         auto chunk = ca->get_cell_of(chunk_id);
         return chunk->RowNums();
     }
 
-    virtual PinWrapper<SpanBase>
-    Span(int64_t chunk_id) const {
-        PanicInfo(ErrorCode::Unsupported,
-                  "Span only supported for ChunkedColumn");
-    }
-
-    virtual PinWrapper<std::pair<std::vector<std::string_view>, FixedVector<bool>>>
-    StringViews(int64_t chunk_id,
-                std::optional<std::pair<int64_t, int64_t>> offset_len = std::nullopt) const {
-        PanicInfo(ErrorCode::Unsupported,
-                  "StringViews only supported for VariableColumn");
-    }
-
-    virtual PinWrapper<std::pair<std::vector<ArrayView>, FixedVector<bool>>>
-    ArrayViews(int64_t chunk_id,
-               std::optional<std::pair<int64_t, int64_t>> offset_len) const {
-        PanicInfo(ErrorCode::Unsupported,
-                  "ArrayViews only supported for ArrayChunkedColumn");
-    }
-
-    virtual PinWrapper<std::pair<std::vector<std::string_view>, FixedVector<bool>>>
-    ViewsByOffsets(int64_t chunk_id,
-                   const FixedVector<int32_t>& offsets) const {
-        PanicInfo(ErrorCode::Unsupported,
-                  "ViewsByOffsets only supported for VariableColumn");
-    }
-
     std::pair<size_t, size_t>
-    GetChunkIDByOffset(int64_t offset) const {
+    GetChunkIDByOffset(int64_t offset) const override {
         AssertInfo(offset < num_rows_,
                    "offset {} is out of range, num_rows: {}",
                    offset,
@@ -158,23 +123,24 @@ class ChunkedColumnBase {
         return {chunk_idx, offset_in_chunk};
     }
 
-    PinWrapper<Chunk*>
-    GetChunk(int64_t chunk_id) {
-        auto ca = SemiInlineGet(slot_->PinCells({chunk_id}));
-        auto chunk = ca->get_cell_of(chunk_id);
-        return PinWrapper<Chunk*>(ca, chunk);
-    }
-
     int64_t
-    GetNumRowsUntilChunk(int64_t chunk_id) const {
+    GetNumRowsUntilChunk(int64_t chunk_id) const override {
         return GetNumRowsUntilChunk()[chunk_id];
     }
 
     const std::vector<int64_t>&
-    GetNumRowsUntilChunk() const {
-        auto meta = static_cast<milvus::segcore::storagev1translator::CTMeta*>(
+    GetNumRowsUntilChunk() const override {
+        auto meta = static_cast<milvus::cachinglayer::CTMeta*>(
             slot_->meta());
         return meta->num_rows_until_chunk_;
+    }
+
+    // Get a specific chunk by its ID
+    PinWrapper<Chunk*>
+    GetChunk(int64_t chunk_id) override {
+        auto ca = SemiInlineGet(slot_->PinCells({chunk_id}));
+        auto chunk = ca->get_cell_of(chunk_id);
+        return PinWrapper<Chunk*>(ca, chunk);
     }
 
  protected:
@@ -202,7 +168,7 @@ class ChunkedColumn : public ChunkedColumnBase {
     }
 
     PinWrapper<SpanBase>
-    Span(int64_t chunk_id) const override {
+    Span(int64_t chunk_id) const {
         auto ca = SemiInlineGet(slot_->PinCells({chunk_id}));
         auto chunk = ca->get_cell_of(chunk_id);
         return PinWrapper<SpanBase>(
@@ -226,7 +192,7 @@ class ChunkedVariableColumn : public ChunkedColumnBase {
     PinWrapper<std::pair<std::vector<std::string_view>, FixedVector<bool>>>
     StringViews(int64_t chunk_id,
                 std::optional<std::pair<int64_t, int64_t>> offset_len =
-                    std::nullopt) const override {
+                    std::nullopt) const {
         auto ca = SemiInlineGet(slot_->PinCells({chunk_id}));
         auto chunk = ca->get_cell_of(chunk_id);
         return PinWrapper<
@@ -236,7 +202,7 @@ class ChunkedVariableColumn : public ChunkedColumnBase {
 
     PinWrapper<std::pair<std::vector<std::string_view>, FixedVector<bool>>>
     ViewsByOffsets(int64_t chunk_id,
-                   const FixedVector<int32_t>& offsets) const override {
+                   const FixedVector<int32_t>& offsets) const {
         auto ca = SemiInlineGet(slot_->PinCells({chunk_id}));
         auto chunk = ca->get_cell_of(chunk_id);
         return PinWrapper<
@@ -290,7 +256,7 @@ class ChunkedArrayColumn : public ChunkedColumnBase {
     PinWrapper<std::pair<std::vector<ArrayView>, FixedVector<bool>>>
     ArrayViews(int64_t chunk_id,
                std::optional<std::pair<int64_t, int64_t>> offset_len =
-                   std::nullopt) const override {
+                   std::nullopt) const {
         auto ca =
             SemiInlineGet(slot_->PinCells({static_cast<cid_t>(chunk_id)}));
         auto chunk = ca->get_cell_of(chunk_id);
