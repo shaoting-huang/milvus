@@ -182,43 +182,11 @@ GroupChunkTranslator::get_cells(
 
 void
 GroupChunkTranslator::load_column_group_in_memory() {
-    std::vector<size_t> row_counts;
-    for (size_t i = 0; i < field_id_list_.size(); ++i) {
-        row_counts.push_back(0);
-    }
+    std::vector<size_t> row_counts(field_id_list_.size(), 0);
     std::shared_ptr<milvus::ArrowDataWrapper> r;
-    size_t batch_idx = 0;
     while (column_group_info_.arrow_reader_channel->pop(r)) {
         for (const auto& table : r->arrow_tables) {
-            size_t batch_num_rows = table->num_rows();
-            // Create chunks for each field in this batch
-            std::unordered_map<FieldId, std::shared_ptr<Chunk>> chunks;
-            
-            // Iterate through field_id_list to get field_id and create chunk
-            for (size_t i = 0; i < field_id_list_.size(); ++i) {
-                auto field_id = field_id_list_.Get(i);
-                auto fid = milvus::FieldId(field_id);
-                auto it = field_metas_.find(fid);
-                AssertInfo(it != field_metas_.end(), "Field id not found in field_metas");
-                const auto& field_meta = it->second;
-                
-                auto dim = IsVectorDataType(field_meta.get_data_type()) &&
-                          !IsSparseFloatVectorDataType(field_meta.get_data_type())
-                          ? field_meta.get_dim()
-                          : 1;
-                arrow::ArrayVector array_vec;
-                for (const auto& array : table->column(i)->chunks()) {
-                    array_vec.push_back(array);
-                }
-                auto chunk = create_chunk(field_meta, dim, array_vec);
-                row_counts[i] += chunk->RowNums();
-                metas_[fid].num_rows_until_chunk_.push_back(row_counts[i]);
-                chunks[fid] = std::make_shared<Chunk>(chunk.get());
-            }
-            
-            // Create GroupChunk from chunks and store in results
-            auto group_chunk = std::make_unique<milvus::GroupChunk>(std::move(chunks));
-            group_chunks_.emplace_back(group_chunk.release());
+            process_batch(table, nullptr, nullptr, row_counts);
         }
     }
 }
@@ -228,6 +196,8 @@ GroupChunkTranslator::load_column_group_in_mmap() {
     std::vector<std::shared_ptr<File>> files;
     std::vector<size_t> file_offsets;
     std::vector<size_t> row_counts;
+    
+    // Initialize files and offsets
     for (size_t i = 0; i < field_id_list_.size(); ++i) {
         auto field_id = field_id_list_.Get(i);
         auto filepath = std::filesystem::path(column_group_info_.mmap_dir_path) /
@@ -242,41 +212,54 @@ GroupChunkTranslator::load_column_group_in_mmap() {
     }
     
     std::shared_ptr<milvus::ArrowDataWrapper> r;
-    size_t batch_idx = 0;
     while (column_group_info_.arrow_reader_channel->pop(r)) {
         for (const auto& table : r->arrow_tables) {
-            size_t batch_num_rows = table->num_rows();
-            // Create chunks for each field in this batch
-            std::unordered_map<FieldId, std::shared_ptr<Chunk>> chunks;
-            
-            // Iterate through field_id_list to get field_id and create chunk
-            for (size_t i = 0; i < field_id_list_.size(); ++i) {
-                auto field_id = field_id_list_.Get(i);
-                auto fid = milvus::FieldId(field_id);
-                auto it = field_metas_.find(fid);
-                AssertInfo(it != field_metas_.end(), "Field id not found in field_metas");
-                const auto& field_meta = it->second;
-                
-                auto dim = IsVectorDataType(field_meta.get_data_type()) &&
-                          !IsSparseFloatVectorDataType(field_meta.get_data_type())
-                          ? field_meta.get_dim()
-                          : 1;
-                arrow::ArrayVector array_vec;
-                for (const auto& array : table->column(i)->chunks()) {
-                    array_vec.push_back(array);
-                }
-                auto chunk = create_chunk(field_meta, dim, *files[i], file_offsets[i], array_vec);
-                row_counts[i] += chunk->RowNums();
-                metas_[fid].num_rows_until_chunk_.push_back(row_counts[i]);
-                file_offsets[i] += chunk->Size();
-                chunks[fid] = std::make_shared<Chunk>(chunk.get());
-            }
-            
-            // Create GroupChunk from chunks and store in results
-            auto group_chunk = std::make_unique<milvus::GroupChunk>(std::move(chunks));
-            group_chunks_.emplace_back(group_chunk.release());
+            process_batch(table, &files, &file_offsets, row_counts);
         }
     }
+}
+
+void
+GroupChunkTranslator::process_batch(
+    const std::shared_ptr<arrow::Table>& table,
+    const std::vector<std::shared_ptr<File>>* files,
+    std::vector<size_t>* file_offsets,
+    std::vector<size_t>& row_counts) {
+    // Create chunks for each field in this batch
+    std::unordered_map<FieldId, std::shared_ptr<Chunk>> chunks;
+    
+    // Iterate through field_id_list to get field_id and create chunk
+    for (size_t i = 0; i < field_id_list_.size(); ++i) {
+        auto field_id = field_id_list_.Get(i);
+        auto fid = milvus::FieldId(field_id);
+        auto it = field_metas_.find(fid);
+        AssertInfo(it != field_metas_.end(), "Field id not found in field_metas");
+        const auto& field_meta = it->second;
+        
+        auto dim = IsVectorDataType(field_meta.get_data_type()) &&
+                  !IsSparseFloatVectorDataType(field_meta.get_data_type())
+                  ? field_meta.get_dim()
+                  : 1;
+        const arrow::ArrayVector& array_vec = table->column(i)->chunks();
+
+        std::unique_ptr<Chunk> chunk;
+        if (files == nullptr) {
+            // Memory mode
+            chunk = create_chunk(field_meta, dim, array_vec);
+        } else {
+            // Mmap mode
+            chunk = create_chunk(field_meta, dim, *(*files)[i], (*file_offsets)[i], array_vec);
+            (*file_offsets)[i] += chunk->Size();
+        }
+
+        row_counts[i] += chunk->RowNums();
+        meta_.num_rows_until_chunk_[fid].push_back(row_counts[i]);
+        chunks[fid] = std::make_shared<Chunk>(chunk.get());
+    }
+    
+    // Create GroupChunk from chunks and store in results
+    auto group_chunk = std::make_unique<milvus::GroupChunk>(std::move(chunks));
+    group_chunks_.emplace_back(group_chunk.release());
 }
 
 }  // namespace milvus::segcore::storagev2translator

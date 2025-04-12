@@ -130,7 +130,7 @@ class ChunkedColumnBase : public ChunkedColumnInterface {
 
     const std::vector<int64_t>&
     GetNumRowsUntilChunk() const override {
-        auto meta = static_cast<milvus::cachinglayer::CTMeta*>(
+        auto meta = static_cast<segcore::storagev1translator::CTMeta*>(
             slot_->meta());
         return meta->num_rows_until_chunk_;
     }

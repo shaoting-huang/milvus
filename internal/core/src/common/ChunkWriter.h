@@ -33,7 +33,7 @@ class ChunkWriterBase {
     }
 
     virtual void
-    write(arrow::ArrayVector& data) = 0;
+    write(const arrow::ArrayVector& data) = 0;
 
     virtual std::unique_ptr<Chunk>
     finish() = 0;
@@ -77,7 +77,7 @@ class ChunkWriter final : public ChunkWriterBase {
         : ChunkWriterBase(file, offset, nullable), dim_(dim){};
 
     void
-    write(arrow::ArrayVector& array_vec) override {
+    write(const arrow::ArrayVector& array_vec) override {
         auto size = 0;
         auto row_nums = 0;
 
@@ -134,7 +134,7 @@ class ChunkWriter final : public ChunkWriterBase {
 
 template <>
 inline void
-ChunkWriter<arrow::BooleanArray, bool>::write(arrow::ArrayVector& array_vec) {
+ChunkWriter<arrow::BooleanArray, bool>::write(const arrow::ArrayVector& array_vec) {
     auto size = 0;
     auto row_nums = 0;
 
@@ -179,7 +179,7 @@ class StringChunkWriter : public ChunkWriterBase {
     using ChunkWriterBase::ChunkWriterBase;
 
     void
-    write(arrow::ArrayVector& array_vec) override;
+    write(const arrow::ArrayVector& array_vec) override;
 
     std::unique_ptr<Chunk>
     finish() override;
@@ -190,7 +190,7 @@ class JSONChunkWriter : public ChunkWriterBase {
     using ChunkWriterBase::ChunkWriterBase;
 
     void
-    write(arrow::ArrayVector& array_vec) override;
+    write(const arrow::ArrayVector& array_vec) override;
 
     std::unique_ptr<Chunk>
     finish() override;
@@ -209,7 +209,7 @@ class ArrayChunkWriter : public ChunkWriterBase {
     }
 
     void
-    write(arrow::ArrayVector& array_vec) override;
+    write(const arrow::ArrayVector& array_vec) override;
 
     std::unique_ptr<Chunk>
     finish() override;
@@ -223,7 +223,7 @@ class SparseFloatVectorChunkWriter : public ChunkWriterBase {
     using ChunkWriterBase::ChunkWriterBase;
 
     void
-    write(arrow::ArrayVector& array_vec) override;
+    write(const arrow::ArrayVector& array_vec) override;
 
     std::unique_ptr<Chunk>
     finish() override;
@@ -232,14 +232,14 @@ class SparseFloatVectorChunkWriter : public ChunkWriterBase {
 std::unique_ptr<Chunk>
 create_chunk(const FieldMeta& field_meta,
              int dim,
-             arrow::ArrayVector& array_vec);
+             const arrow::ArrayVector& array_vec);
 
 std::unique_ptr<Chunk>
 create_chunk(const FieldMeta& field_meta,
              int dim,
              File& file,
              size_t file_offset,
-             arrow::ArrayVector& array_vec);
+             const arrow::ArrayVector& array_vec);
 
 arrow::ArrayVector
 read_single_column_batches(std::shared_ptr<arrow::RecordBatchReader> reader);

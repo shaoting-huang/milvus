@@ -29,7 +29,7 @@
 namespace milvus {
 
 void
-StringChunkWriter::write(arrow::ArrayVector& array_vec) {
+StringChunkWriter::write(const arrow::ArrayVector& array_vec) {
     auto size = 0;
     std::vector<std::string_view> strs;
     std::vector<std::pair<const uint8_t*, int64_t>> null_bitmaps;
@@ -87,7 +87,7 @@ StringChunkWriter::finish() {
 }
 
 void
-JSONChunkWriter::write(arrow::ArrayVector& array_vec) {
+JSONChunkWriter::write(const arrow::ArrayVector& array_vec) {
     auto size = 0;
     std::vector<Json> jsons;
     std::vector<std::pair<const uint8_t*, int64_t>> null_bitmaps;
@@ -145,7 +145,7 @@ JSONChunkWriter::finish() {
 }
 
 void
-ArrayChunkWriter::write(arrow::ArrayVector& array_vec) {
+ArrayChunkWriter::write(const arrow::ArrayVector& array_vec) {
     auto size = 0;
     auto is_string = IsStringDataType(element_type_);
     std::vector<Array> arrays;
@@ -230,7 +230,7 @@ ArrayChunkWriter::finish() {
 }
 
 void
-SparseFloatVectorChunkWriter::write(arrow::ArrayVector& array_vec) {
+SparseFloatVectorChunkWriter::write(const arrow::ArrayVector& array_vec) {
     auto size = 0;
     std::vector<std::string> strs;
     std::vector<std::pair<const uint8_t*, int64_t>> null_bitmaps;
@@ -293,7 +293,7 @@ SparseFloatVectorChunkWriter::finish() {
 std::unique_ptr<Chunk>
 create_chunk(const FieldMeta& field_meta,
              int dim,
-             arrow::ArrayVector& array_vec) {
+             const arrow::ArrayVector& array_vec) {
     std::shared_ptr<ChunkWriterBase> w;
     bool nullable = field_meta.is_nullable();
 
@@ -395,7 +395,7 @@ create_chunk(const FieldMeta& field_meta,
              int dim,
              File& file,
              size_t file_offset,
-             arrow::ArrayVector& array_vec) {
+             const arrow::ArrayVector& array_vec) {
     std::shared_ptr<ChunkWriterBase> w;
     bool nullable = field_meta.is_nullable();
 

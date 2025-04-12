@@ -24,10 +24,6 @@ namespace milvus::cachinglayer {
 // in the future.
 class Meta {};
 
-struct CTMeta : public milvus::cachinglayer::Meta {
-    std::vector<int64_t> num_rows_until_chunk_;
-};
-
 template <typename CellT>
 class Translator {
  public:

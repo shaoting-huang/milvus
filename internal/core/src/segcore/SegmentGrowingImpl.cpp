@@ -33,6 +33,7 @@
 #include "query/SearchOnSealed.h"
 #include "segcore/SegmentGrowingImpl.h"
 #include "segcore/Utils.h"
+#include "segcore/memory_planner.h"
 #include "storage/RemoteChunkManagerSingleton.h"
 #include "storage/Util.h"
 #include "storage/ThreadPools.h"
@@ -379,9 +380,8 @@ SegmentGrowingImpl::load_column_group_data_internal(
                   });
         auto fs = milvus_storage::ArrowFileSystemSingleton::GetInstance()
                       .GetArrowFileSystem();
-        auto file_reader =
-            std::make_shared<milvus_storage::FileRecordBatchReader>(
-                fs, insert_files[0], arrow_schema);
+        auto file_reader = std::make_shared<milvus_storage::FileRowGroupReader>(
+            fs, insert_files[0], arrow_schema);
         std::shared_ptr<milvus_storage::PackedFileMetadata> metadata =
             file_reader->file_metadata();
 
@@ -391,8 +391,9 @@ SegmentGrowingImpl::load_column_group_data_internal(
             metadata->GetGroupFieldIDList().GetFieldIDList(
                 column_group_id.get());
 
-        auto column_group_info = FieldDataInfo(
-            column_group_id.get(), num_rows, infos.mmap_dir_path);
+        auto column_group_info =
+            FieldDataInfo(column_group_id.get(), num_rows, infos.mmap_dir_path);
+        column_group_info.arrow_reader_channel->set_capacity(parallel_degree);
 
         LOG_INFO("segment {} loads column group {} with num_rows {}",
                  this->get_segment_id(),
@@ -406,20 +407,25 @@ SegmentGrowingImpl::load_column_group_data_internal(
         std::vector<std::vector<int64_t>> row_group_lists;
         row_group_lists.reserve(insert_files.size());
         for (const auto& file : insert_files) {
-            auto reader = std::make_shared<milvus_storage::FileRecordBatchReader>(
-                fs, file);
-            auto row_group_num = reader->file_metadata()->GetRowGroupMetadataVector().size();
+            auto reader =
+                std::make_shared<milvus_storage::FileRowGroupReader>(fs, file);
+            auto row_group_num =
+                reader->file_metadata()->GetRowGroupMetadataVector().size();
             std::vector<int64_t> all_row_groups(row_group_num);
             std::iota(all_row_groups.begin(), all_row_groups.end(), 0);
             row_group_lists.push_back(all_row_groups);
         }
+        // create parallel degree split strategy
+        auto strategy =
+            std::make_unique<ParallelDegreeSplitStrategy>(parallel_degree);
 
-        auto load_future = pool.Submit(LoadArrowReaderFromStorageV2,
-                                       insert_files,
-                                       column_group_info.arrow_reader_channel,
-                                       DEFAULT_FIELD_MAX_MEMORY_LIMIT,
-                                       parallel_degree,  // Set parallel_degree to 1 to read all row groups at once
-                                       row_group_lists);
+        auto load_future = pool.Submit([&]() {
+            return LoadWithStrategy(insert_files,
+                                    column_group_info.arrow_reader_channel,
+                                    DEFAULT_FIELD_MAX_MEMORY_LIMIT,
+                                    std::move(strategy),
+                                    row_group_lists);
+        });
 
         LOG_INFO("segment {} submits load fields {} task to thread pool",
                  this->get_segment_id(),
@@ -429,8 +435,8 @@ SegmentGrowingImpl::load_column_group_data_internal(
 
         std::unordered_map<FieldId, std::vector<FieldDataPtr>> field_data_map;
         while (column_group_info.arrow_reader_channel->pop(r)) {
-            for (const auto& batch : r->record_batches) {
-                size_t batch_num_rows = batch->num_rows();
+            for (const auto& table : r->arrow_tables) {
+                size_t batch_num_rows = table->num_rows();
                 for (int i = 0; i < field_ids.size(); ++i) {
                     auto field_id = FieldId(field_ids.Get(i));
                     for (auto& field : schema_->get_fields()) {
@@ -443,7 +449,7 @@ SegmentGrowingImpl::load_column_group_data_internal(
                             field.second.is_vector() ? field.second.get_dim()
                                                      : 0,
                             batch_num_rows);
-                        field_data->FillFieldData(batch->column(i));
+                        field_data->FillFieldData(table->column(i));
                         field_data_map[field_id].push_back(field_data);
                     }
                 }

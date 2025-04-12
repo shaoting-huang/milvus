@@ -111,13 +111,6 @@ LoadArrowReaderFromRemote(const std::vector<std::string>& remote_files,
                           std::shared_ptr<ArrowReaderChannel> channel);
 
 void
-LoadArrowReaderFromStorageV2(const std::vector<std::string>& remote_files,
-                             std::shared_ptr<ArrowReaderChannel> channel,
-                             int64_t memory_limit,
-                             uint64_t parallel_degree,
-                             const std::vector<std::vector<int64_t>>& row_group_lists);
-
-void
 LoadFieldDatasFromRemote(const std::vector<std::string>& remote_files,
                          FieldDataChannelPtr channel);
 

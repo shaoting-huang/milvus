@@ -29,6 +29,11 @@
 
 namespace milvus::segcore::storagev2translator {
 
+struct GroupCTMeta : public milvus::cachinglayer::Meta {
+    // key: field_id, value: num_rows_until_chunk_
+    std::unordered_map<milvus::FieldId, std::vector<int64_t>> num_rows_until_chunk_;
+};
+
 class GroupChunkTranslator
     : public milvus::cachinglayer::Translator<milvus::GroupChunk> {
  public:
@@ -71,6 +76,12 @@ class GroupChunkTranslator
     void
     load_column_group_in_mmap();
 
+    void process_batch(
+        const std::shared_ptr<arrow::Table>& table,
+        const std::vector<std::shared_ptr<File>>* files,
+        std::vector<size_t>* file_offsets,
+        std::vector<size_t>& row_counts);
+
     int64_t segment_id_;
     std::string key_;
     std::unordered_map<FieldId, FieldMeta> field_metas_;
@@ -79,7 +90,7 @@ class GroupChunkTranslator
     milvus::cachinglayer::StorageType storage_type_;
     std::vector<milvus_storage::RowGroupMetadataVector> row_group_meta_list_;
     milvus_storage::FieldIDList field_id_list_;
-    std::unordered_map<FieldId, milvus::cachinglayer::CTMeta> metas_;
+    GroupCTMeta meta_;
 
     std::vector<milvus::GroupChunk*> group_chunks_;
 };
