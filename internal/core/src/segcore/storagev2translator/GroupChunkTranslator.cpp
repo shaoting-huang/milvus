@@ -53,43 +53,6 @@ GroupChunkTranslator::GroupChunkTranslator(
       field_id_list_(field_id_list) {
     AssertInfo(insert_files_.size() == row_group_meta_list_.size(), 
               "Number of insert files must match number of row group metas");
-    std::vector<std::vector<int64_t>> row_group_lists;
-    row_group_lists.reserve(insert_files.size());
-    std::vector<std::vector<int64_t>> file_row_groups(row_group_meta_list_.size());
-    for (const auto& row_group_meta : row_group_meta_list_) {
-        auto row_group_num = row_group_meta.size();
-        std::vector<int64_t> all_row_groups(row_group_num);
-        std::iota(all_row_groups.begin(), all_row_groups.end(), 0);
-        row_group_lists.push_back(all_row_groups);
-    }
-    auto parallel_degree =
-        static_cast<uint64_t>(DEFAULT_FIELD_MAX_MEMORY_LIMIT / FILE_SLICE_SIZE);
-    // create parallel degree split strategy
-    auto strategy =
-        std::make_unique<ParallelDegreeSplitStrategy>(parallel_degree);
-
-    auto& pool =
-            ThreadPools::GetThreadPool(milvus::ThreadPoolPriority::MIDDLE);
-    
-    auto fs = milvus_storage::ArrowFileSystemSingleton::GetInstance()
-                  .GetArrowFileSystem();
-    auto load_future = pool.Submit([&]() {
-        return LoadWithStrategy(insert_files,
-                                column_group_info.arrow_reader_channel,
-                                DEFAULT_FIELD_MAX_MEMORY_LIMIT,
-                                std::move(strategy),
-                                row_group_lists);
-    });
-
-    LOG_INFO("segment {} submits load column group {} with fields {} task to thread pool",
-             segment_id_,
-             column_group_info_.field_id,
-             field_id_list_.ToString());
-    if (storage_type_ == cachinglayer::StorageType::MEMORY) {
-        load_column_group_in_memory();
-    } else {
-        load_column_group_in_mmap();
-    }
 }
 
 GroupChunkTranslator::~GroupChunkTranslator() {
@@ -165,15 +128,45 @@ std::vector<std::pair<cachinglayer::cid_t,
                      std::unique_ptr<milvus::GroupChunk>>>
 GroupChunkTranslator::get_cells(
     const std::vector<cachinglayer::cid_t>& cids) {
-    std::vector<
-        std::pair<milvus::cachinglayer::cid_t, std::unique_ptr<milvus::GroupChunk>>>
-        cells;
+    std::vector<std::pair<milvus::cachinglayer::cid_t, std::unique_ptr<milvus::GroupChunk>>> cells;
+    
+    // Create row group lists for requested cids
+    std::vector<std::vector<int64_t>> row_group_lists;
+    row_group_lists.reserve(insert_files_.size());
+    for (size_t i = 0; i < insert_files_.size(); ++i) {
+        row_group_lists.emplace_back();
+    }
+    
+    for (auto cid : cids) {
+        auto [file_idx, row_group_idx] = get_file_and_row_group_index(cid);
+        row_group_lists[file_idx].push_back(row_group_idx);
+    }
+
+    auto parallel_degree = static_cast<uint64_t>(DEFAULT_FIELD_MAX_MEMORY_LIMIT / FILE_SLICE_SIZE);
+    auto strategy = std::make_unique<ParallelDegreeSplitStrategy>(parallel_degree);
+    
+    auto& pool = ThreadPools::GetThreadPool(milvus::ThreadPoolPriority::MIDDLE);
+    auto fs = milvus_storage::ArrowFileSystemSingleton::GetInstance().GetArrowFileSystem();
+    
+    auto load_future = pool.Submit([&]() {
+        return LoadWithStrategy(insert_files_,
+                              column_group_info_.arrow_reader_channel,
+                              DEFAULT_FIELD_MAX_MEMORY_LIMIT,
+                              std::move(strategy),
+                              row_group_lists);
+    });
+
+    if (storage_type_ == cachinglayer::StorageType::MEMORY) {
+        load_column_group_in_memory();
+    } else {
+        load_column_group_in_mmap();
+    }
+
     for (auto cid : cids) {
         AssertInfo(group_chunks_[cid] != nullptr,
-                   "GroupChunkTranslator::get_cells called again on cell {} of "
-                   "CacheSlot {}.",
-                   cid,
-                   key_);
+                  "GroupChunkTranslator::get_cells failed to load cell {} of CacheSlot {}.",
+                  cid,
+                  key_);
         cells.emplace_back(cid, std::unique_ptr<milvus::GroupChunk>(group_chunks_[cid]));
         group_chunks_[cid] = nullptr;
     }
@@ -243,7 +236,7 @@ GroupChunkTranslator::process_batch(
         const arrow::ArrayVector& array_vec = table->column(i)->chunks();
 
         std::unique_ptr<Chunk> chunk;
-        if (files == nullptr) {
+        if (storage_type_ == cachinglayer::StorageType::MEMORY) {
             // Memory mode
             chunk = create_chunk(field_meta, dim, array_vec);
         } else {
