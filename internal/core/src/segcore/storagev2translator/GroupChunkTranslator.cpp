@@ -254,11 +254,11 @@ GroupChunkTranslator::process_batch(
 
         row_counts[i] += chunk->RowNums();
         meta_.num_rows_until_chunk_[fid].push_back(row_counts[i]);
-        chunks[fid] = std::make_shared<Chunk>(chunk.get());
+        chunks[fid] = std::move(chunk);
     }
     
     // Create GroupChunk from chunks and store in results
-    auto group_chunk = std::make_unique<milvus::GroupChunk>(std::move(chunks));
+    auto group_chunk = std::make_unique<milvus::GroupChunk>(chunks);
     group_chunks_.emplace_back(group_chunk.release());
 }
 

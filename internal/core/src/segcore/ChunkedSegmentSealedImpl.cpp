@@ -235,7 +235,7 @@ ChunkedSegmentSealedImpl::load_column_group_data_internal(
         auto fs = milvus_storage::ArrowFileSystemSingleton::GetInstance()
                       .GetArrowFileSystem();
         auto file_reader =
-            std::make_shared<milvus_storage::FileRecordBatchReader>(
+            std::make_shared<milvus_storage::FileRowGroupReader>(
                 fs, insert_files[0], arrow_schema);
         std::shared_ptr<milvus_storage::PackedFileMetadata> metadata =
             file_reader->file_metadata();
@@ -244,7 +244,7 @@ ChunkedSegmentSealedImpl::load_column_group_data_internal(
 
         std::vector<milvus_storage::RowGroupMetadataVector> row_group_meta_list;
         for (const auto& file : insert_files) {
-            auto reader = std::make_shared<milvus_storage::FileRecordBatchReader>(
+            auto reader = std::make_shared<milvus_storage::FileRowGroupReader>(
                 fs, file);
             row_group_meta_list.push_back(reader->file_metadata()->GetRowGroupMetadataVector());
         }
