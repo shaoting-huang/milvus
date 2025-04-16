@@ -202,6 +202,23 @@ class ProxyChunkColumn : public ChunkedColumnInterface {
         return group_chunk.get()->GetChunk(field_id_).get();
     }
 
+     const char*
+    ValueAt(int64_t offset) {
+        auto [chunk_id, offset_in_chunk] = GetChunkIDByOffset(offset);
+        auto ca =
+            SemiInlineGet(slot_->PinCells({static_cast<cid_t>(chunk_id)}));
+        auto chunk = ca->get_cell_of(chunk_id);
+        return chunk->ValueAt(offset_in_chunk);
+    }
+
+    PinWrapper<SpanBase>
+    Span(int64_t chunk_id) const {
+        auto ca = SemiInlineGet(slot_->PinCells({chunk_id}));
+        auto chunk = ca->get_cell_of(chunk_id);
+        return PinWrapper<SpanBase>(
+            ca, static_cast<FixedWidthChunk*>(chunk)->Span());
+    }
+
  private:
     std::shared_ptr<ChunkedColumnGroup> group_;
     FieldId field_id_;

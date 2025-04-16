@@ -286,22 +286,65 @@ ChunkedSegmentSealedImpl::load_column_group_data_internal(
         // // Create ProxyChunkColumn for each field in this column group
         for (const auto& field_id : milvus_field_ids) {
             auto field_meta = field_metas.at(field_id);
-            auto proxy_column = std::make_shared<ProxyChunkColumn>(
+            auto column = std::make_shared<ProxyChunkColumn>(
                 chunked_column_group, field_id, field_meta);
-            fields_.emplace(field_id, proxy_column);
-        }
+            auto data_type = field_meta.get_data_type();
 
-        // for (auto field_id : milvus_field_ids) {
-        //     if (generate_interim_index(field_id)) {
-        //         std::unique_lock lck(mutex_);
-        //         // mmap_fields is useless, no change
-        //         fields_.erase(field_id);
-        //         set_bit(field_data_ready_bitset_, field_id, false);
-        //     } else {
-        //         std::unique_lock lck(mutex_);
-        //         set_bit(field_data_ready_bitset_, field_id, true);
-        //     }
-        // }
+            if (SystemProperty::Instance().IsSystem(field_id)) {
+                if (field_id == RowFieldID) {
+                    continue;
+                }
+            } else {
+                {
+                    std::unique_lock lck(mutex_);
+                    fields_.emplace(field_id, column);
+                    if (info.enable_mmap) {
+                        mmap_fields_.insert(field_id);
+                    }
+                }
+
+                if (!info.enable_mmap) {
+                    stats_.mem_size += column->DataByteSize();
+                    if (IsVariableDataType(data_type)) {
+                        if (data_type == milvus::DataType::STRING ||
+                            data_type == milvus::DataType::VARCHAR ||
+                            data_type == milvus::DataType::TEXT) {
+                            auto var_column = std::dynamic_pointer_cast<ChunkedVariableColumn<std::string>>(column);
+                            LoadStringSkipIndex(
+                                field_id,
+                                0,
+                                *var_column);
+                        }
+                        // update average row data size
+                        SegmentInternalInterface::set_field_avg_size(
+                            field_id, num_rows, column->DataByteSize());
+                    } else {
+                        auto num_chunk = column->num_chunks();
+                        for (int i = 0; i < num_chunk; ++i) {
+                            auto primitive_column = std::dynamic_pointer_cast<ChunkedColumn>(column);
+                            AssertInfo(primitive_column != nullptr, "column is not of primitive type");
+                            auto pw = primitive_column->Span(i);
+                            LoadPrimitiveSkipIndex(field_id,
+                                                i,
+                                                data_type,
+                                                pw.get().data(),
+                                                pw.get().valid_data(),
+                                                pw.get().row_count());
+                        }
+                    }
+                }
+
+                if (generate_interim_index(field_id)) {
+                    std::unique_lock lck(mutex_);
+                    // mmap_fields is useless, no change
+                    fields_.erase(field_id);
+                    set_bit(field_data_ready_bitset_, field_id, false);
+                } else {
+                    std::unique_lock lck(mutex_);
+                    set_bit(field_data_ready_bitset_, field_id, true);
+                }
+            }
+        }
     }
 }
 

@@ -421,7 +421,7 @@ class ChunkedSegmentSealedImpl : public SegmentSealed {
     mutable std::shared_ptr<CacheSlot<InsertRecord<true>>>
         insert_record_slot_;
 
-    // deleted pks
+    // deleted pks.
     mutable std::unique_ptr<DeletedRecord<true>> deleted_record_;
 
     LoadFieldDataInfo field_data_info_;

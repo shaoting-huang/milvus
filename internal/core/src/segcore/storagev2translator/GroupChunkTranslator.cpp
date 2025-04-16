@@ -228,11 +228,14 @@ GroupChunkTranslator::process_batch(
     std::vector<size_t>& row_counts) {
     // Create chunks for each field in this batch
     std::unordered_map<FieldId, std::shared_ptr<Chunk>> chunks;
-    
     // Iterate through field_id_list to get field_id and create chunk
     for (size_t i = 0; i < field_id_list_.size(); ++i) {
         auto field_id = field_id_list_.Get(i);
         auto fid = milvus::FieldId(field_id);
+        if (fid == RowFieldID) {
+            // ignore row id field
+            continue;
+        }
         auto it = field_metas_.find(fid);
         AssertInfo(it != field_metas_.end(), "Field id not found in field_metas");
         const auto& field_meta = it->second;
@@ -241,31 +244,6 @@ GroupChunkTranslator::process_batch(
                     !IsSparseFloatVectorDataType(field_meta.get_data_type())
                     ? field_meta.get_dim()
                     : 1;
-        if (SystemProperty::Instance().IsSystem(fid)) {
-            if (fid == RowFieldID) {
-                // ignore row id field
-                continue;
-            }
-            auto num_rows = column_group_info_.row_count;
-            AssertInfo(milvus::SystemProperty::Instance().IsSystem(fid),
-               "system field is not system field");
-            auto system_field_type =
-                milvus::SystemProperty::Instance().GetSystemFieldType(fid);
-            AssertInfo(system_field_type == SystemFieldType::Timestamp,
-                    "system field is not timestamp");
-            std::vector<Timestamp> timestamps(num_rows);
-            FieldMeta field_meta(
-                FieldName(""), FieldId(0), DataType::INT64, false, std::nullopt);
-
-            auto chunk = create_chunk(field_meta, 1, array_vec);
-            auto chunk_ptr = static_cast<FixedWidthChunk*>(chunk.get());
-            std::copy_n(static_cast<const Timestamp*>(chunk_ptr->Span().data()),
-                        chunk_ptr->Span().row_count(),
-                        timestamps.data() + timestamp_offet_);
-            timestamp_offet_ += chunk_ptr->Span().row_count();
-            continue;
-        } 
-
         std::unique_ptr<Chunk> chunk;
         if (storage_type_ == cachinglayer::StorageType::MEMORY) {
             // Memory mode
@@ -280,7 +258,6 @@ GroupChunkTranslator::process_batch(
         meta_.num_rows_until_chunk_[fid].push_back(row_counts[i]);
         chunks[fid] = std::move(chunk);
     }
-    
     // Create GroupChunk from chunks and store in results
     auto group_chunk = std::make_unique<milvus::GroupChunk>(chunks);
     group_chunks_.emplace_back(group_chunk.release());
