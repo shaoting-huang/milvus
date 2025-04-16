@@ -15,7 +15,7 @@
 // limitations under the License.
 #include "segcore/storagev2translator/GroupChunkTranslator.h"
 #include "common/GroupChunk.h"
-
+#include "common/SystemProperty.h"
 #include "mmap/Types.h"
 #include "common/Types.h"
 #include "milvus-storage/common/metadata.h"
@@ -23,6 +23,9 @@
 #include "storage/ThreadPools.h"
 #include "segcore/Utils.h"
 #include "segcore/memory_planner.h"
+#include "segcore/InsertRecord.h"
+#include "segcore/ChunkedSegmentSealedImpl.h"
+#include "segcore/TimestampIndex.h"
 
 #include <string>
 #include <vector>
@@ -35,6 +38,7 @@
 
 namespace milvus::segcore::storagev2translator {
 
+
 GroupChunkTranslator::GroupChunkTranslator(
     int64_t segment_id,
     const std::unordered_map<FieldId, FieldMeta>& field_metas,
@@ -42,7 +46,9 @@ GroupChunkTranslator::GroupChunkTranslator(
     std::vector<std::string> insert_files,
     milvus::cachinglayer::StorageType storage_type,
     std::vector<milvus_storage::RowGroupMetadataVector>& row_group_meta_list,
-    milvus_storage::FieldIDList field_id_list)
+    milvus_storage::FieldIDList field_id_list,
+    SchemaPtr schema,
+    bool is_sorted_by_pk)
     : segment_id_(segment_id),
       key_(fmt::format("seg_{}_cg_{}", segment_id, column_group_info.field_id)),
       field_metas_(field_metas),
@@ -182,6 +188,8 @@ GroupChunkTranslator::load_column_group_in_memory() {
             process_batch(table, nullptr, nullptr, row_counts);
         }
     }
+
+    
 }
 
 void
@@ -228,12 +236,35 @@ GroupChunkTranslator::process_batch(
         auto it = field_metas_.find(fid);
         AssertInfo(it != field_metas_.end(), "Field id not found in field_metas");
         const auto& field_meta = it->second;
-        
-        auto dim = IsVectorDataType(field_meta.get_data_type()) &&
-                  !IsSparseFloatVectorDataType(field_meta.get_data_type())
-                  ? field_meta.get_dim()
-                  : 1;
         const arrow::ArrayVector& array_vec = table->column(i)->chunks();
+        auto dim = IsVectorDataType(field_meta.get_data_type()) &&
+                    !IsSparseFloatVectorDataType(field_meta.get_data_type())
+                    ? field_meta.get_dim()
+                    : 1;
+        if (SystemProperty::Instance().IsSystem(fid)) {
+            if (fid == RowFieldID) {
+                // ignore row id field
+                continue;
+            }
+            auto num_rows = column_group_info_.row_count;
+            AssertInfo(milvus::SystemProperty::Instance().IsSystem(fid),
+               "system field is not system field");
+            auto system_field_type =
+                milvus::SystemProperty::Instance().GetSystemFieldType(fid);
+            AssertInfo(system_field_type == SystemFieldType::Timestamp,
+                    "system field is not timestamp");
+            std::vector<Timestamp> timestamps(num_rows);
+            FieldMeta field_meta(
+                FieldName(""), FieldId(0), DataType::INT64, false, std::nullopt);
+
+            auto chunk = create_chunk(field_meta, 1, array_vec);
+            auto chunk_ptr = static_cast<FixedWidthChunk*>(chunk.get());
+            std::copy_n(static_cast<const Timestamp*>(chunk_ptr->Span().data()),
+                        chunk_ptr->Span().row_count(),
+                        timestamps.data() + timestamp_offet_);
+            timestamp_offet_ += chunk_ptr->Span().row_count();
+            continue;
+        } 
 
         std::unique_ptr<Chunk> chunk;
         if (storage_type_ == cachinglayer::StorageType::MEMORY) {

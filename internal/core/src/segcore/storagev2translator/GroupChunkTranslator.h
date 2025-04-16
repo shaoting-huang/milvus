@@ -26,6 +26,10 @@
 #include "mmap/Types.h"
 #include "common/Types.h"
 #include "common/GroupChunk.h"
+#include "common/Chunk.h"
+#include "segcore/ChunkedSegmentSealedImpl.h"
+#include "segcore/InsertRecord.h"
+
 
 namespace milvus::segcore::storagev2translator {
 
@@ -88,11 +92,15 @@ class GroupChunkTranslator
     FieldDataInfo column_group_info_;
     std::vector<std::string> insert_files_;
     milvus::cachinglayer::StorageType storage_type_;
-    std::vector<milvus_storage::RowGroupMetadataVector> row_group_meta_list_;
+    std::vector<milvus_storage::RowGroupMetadataVector>& row_group_meta_list_;
     milvus_storage::FieldIDList field_id_list_;
+    SchemaPtr schema_;
+    bool is_sorted_by_pk_;
+    ChunkedSegmentSealedImpl* chunked_segment_;
+    std::unique_ptr<milvus::segcore::InsertRecord<true>> ir_;
     GroupCTMeta meta_;
-
     std::vector<milvus::GroupChunk*> group_chunks_;
+    int64_t timestamp_offet_;
 };
 
 }  // namespace milvus::segcore::storagev2translator
