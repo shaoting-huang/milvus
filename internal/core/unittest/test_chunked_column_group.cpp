@@ -219,8 +219,8 @@ TEST_F(ChunkedColumnGroupTest, ChunkedColumnGroup) {
 
     // basic properties
     EXPECT_EQ(column_group->num_chunks(), 1);
-    EXPECT_EQ(column_group->NumRows(), 5);
-    EXPECT_EQ(column_group->GetGroupChunkRowNums(0), 5);
+    EXPECT_EQ(column_group->NumRows(FieldId(1)), 5);
+    EXPECT_EQ(column_group->NumRows(FieldId(2)), 5);
 
     // Get group chunk
     auto retrieved_group_chunk = column_group->GetGroupChunk(0);
@@ -237,17 +237,18 @@ TEST_F(ChunkedColumnGroupTest, ChunkedColumnGroup) {
     EXPECT_EQ(column_group->GetColumnChunk(0, FieldId(3)), nullptr);
 
     // GetNumRowsUntilChunk
-    EXPECT_EQ(column_group->GetNumRowsUntilChunk(0), 0);
-    EXPECT_EQ(column_group->GetNumRowsUntilChunk(1), 5);
-    EXPECT_EQ(column_group->GetNumRowsUntilChunk(2), 5);
+    EXPECT_EQ(column_group->GetNumRowsUntilChunk(FieldId(1), 0), 0);
+    EXPECT_EQ(column_group->GetNumRowsUntilChunk(FieldId(1), 1), 5);
 
     // GetNumRowsUntilChunk vector
-    const auto& rows_until_chunk = column_group->GetNumRowsUntilChunk();
+    const auto& rows_until_chunk =
+        column_group->GetNumRowsUntilChunk(FieldId(1));
     EXPECT_EQ(rows_until_chunk.size(), 1);
     EXPECT_EQ(rows_until_chunk[0], 0);
 
     // boundary conditions
-    EXPECT_EQ(column_group->GetGroupChunkRowNums(100), 0);  // Out of range
+    EXPECT_EQ(column_group->GetNumRowsUntilChunk(FieldId(1), 100),
+              0);  // Out of range
     EXPECT_EQ(column_group->GetColumnChunk(100, FieldId(1)),
               nullptr);  // Out of range
     EXPECT_EQ(column_group->GetColumnChunk(0, FieldId(100)),
