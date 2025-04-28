@@ -315,10 +315,10 @@ class ChunkedArrayColumn : public ChunkedColumnBase {
     }
 };
 
-inline std::shared_ptr<ChunkedColumnInterface> MakeChunkedColumnBase(
-    DataType data_type,
-    std::unique_ptr<Translator<milvus::Chunk>> translator,
-    const FieldMeta& field_meta) {
+inline std::shared_ptr<ChunkedColumnInterface>
+MakeChunkedColumnBase(DataType data_type,
+                      std::unique_ptr<Translator<milvus::Chunk>> translator,
+                      const FieldMeta& field_meta) {
     if (ChunkedColumnInterface::IsChunkedVariableColumnDataType(data_type)) {
         if (data_type == DataType::JSON) {
             return std::static_pointer_cast<ChunkedColumnInterface>(
@@ -332,8 +332,8 @@ inline std::shared_ptr<ChunkedColumnInterface> MakeChunkedColumnBase(
 
     if (ChunkedColumnInterface::IsChunkedArrayColumnDataType(data_type)) {
         return std::static_pointer_cast<ChunkedColumnInterface>(
-            std::make_shared<ChunkedArrayColumn>(
-                std::move(translator), field_meta));
+            std::make_shared<ChunkedArrayColumn>(std::move(translator),
+                                                 field_meta));
     }
 
     return std::static_pointer_cast<ChunkedColumnInterface>(
@@ -341,4 +341,3 @@ inline std::shared_ptr<ChunkedColumnInterface> MakeChunkedColumnBase(
 }
 
 }  // namespace milvus
-
