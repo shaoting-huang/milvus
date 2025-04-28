@@ -357,7 +357,7 @@ ChunkedSegmentSealedImpl::load_field_data_internal(
 
 void
 ChunkedSegmentSealedImpl::load_system_field_internal(FieldId field_id,
-                                                     FieldDataInfo& data) {
+                                                  FieldDataInfo& data) {
     auto num_rows = data.row_count;
     AssertInfo(SystemProperty::Instance().IsSystem(field_id),
                "system field is not system field");
@@ -366,8 +366,7 @@ ChunkedSegmentSealedImpl::load_system_field_internal(FieldId field_id,
     if (system_field_type == SystemFieldType::Timestamp) {
         std::vector<Timestamp> timestamps(num_rows);
         int64_t offset = 0;
-        FieldMeta field_meta(
-            FieldName(""), FieldId(0), DataType::INT64, false, std::nullopt);
+        FieldMeta field_meta(FieldName(""), FieldId(0), DataType::INT64, false, std::nullopt);
         std::shared_ptr<milvus::ArrowDataWrapper> r;
         while (data.arrow_reader_channel->pop(r)) {
             auto array_vec = read_single_column_batches(r->reader);
@@ -1784,7 +1783,8 @@ ChunkedSegmentSealedImpl::load_field_data_common(
     }
 
     // set pks to offset
-    if (schema_->get_primary_field_id() == field_id && !is_sorted_by_pk_) {
+    if (schema_->get_primary_field_id() == field_id &&
+        !is_sorted_by_pk_) {
         AssertInfo(field_id.get() != -1, "Primary key is -1");
         AssertInfo(insert_record_.empty_pks(), "already exists");
         insert_record_.insert_pks(data_type, column.get());

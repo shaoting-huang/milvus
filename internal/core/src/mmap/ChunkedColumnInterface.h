@@ -125,6 +125,7 @@ class ChunkedColumnInterface {
         return !IsChunkedVariableColumnDataType(data_type) &&
                !IsChunkedArrayColumnDataType(data_type);
     }
+
 };
 
 }  // namespace milvus
