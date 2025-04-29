@@ -29,17 +29,9 @@
 #include "common/Chunk.h"
 #include "segcore/ChunkedSegmentSealedImpl.h"
 #include "segcore/InsertRecord.h"
+#include "segcore/storagev2translator/GroupCTMeta.h"
 
 namespace milvus::segcore::storagev2translator {
-
-struct GroupCTMeta : public milvus::cachinglayer::Meta {
-    // key: field_id, value: num_rows_until_chunk_
-    std::unordered_map<milvus::FieldId, std::vector<int64_t>>
-        num_rows_until_chunk_;
-    GroupCTMeta(milvus::cachinglayer::StorageType storage_type)
-        : milvus::cachinglayer::Meta(storage_type) {
-    }
-};
 
 class GroupChunkTranslator
     : public milvus::cachinglayer::Translator<milvus::GroupChunk> {

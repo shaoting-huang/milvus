@@ -38,6 +38,7 @@
 #include "common/Array.h"
 #include "mmap/ChunkedColumn.h"
 #include "mmap/ChunkedColumnInterface.h"
+#include "segcore/storagev2translator/GroupCTMeta.h"
 
 namespace milvus {
 
@@ -50,7 +51,15 @@ class ChunkedColumnGroup {
  public:
     explicit ChunkedColumnGroup(
         std::unique_ptr<Translator<GroupChunk>> translator)
-        : slot_(Manager::GetInstance().CreateCacheSlot(std::move(translator))) {
+        : num_chunks_(translator->num_cells()),
+          slot_(Manager::GetInstance().CreateCacheSlot(std::move(translator))) {
+        std::cout << "ChunkedColumnGroup constructor" << std::endl;
+        std::cout << "num_chunks_: " << num_chunks_ << std::endl;
+        auto num_rows_until_chunk = FieldsNumRowsUntilChunk();
+        for (const auto& [field_id, num_rows] : num_rows_until_chunk) {
+            std::cout << "field_id: " << field_id.get() << ", num_rows: " << num_rows.back() << std::endl;
+            num_rows_map_[field_id] = num_rows.back();
+        }
     }
 
     virtual ~ChunkedColumnGroup() = default;
@@ -58,7 +67,7 @@ class ChunkedColumnGroup {
     // Get the number of group chunks
     size_t
     num_chunks() const {
-        return slot_->num_cells();
+        return num_chunks_;
     }
 
     PinWrapper<GroupChunk*>
@@ -69,45 +78,42 @@ class ChunkedColumnGroup {
     }
 
     int64_t
-    NumRows() const {
-        int64_t total_rows = 0;
-        for (int64_t i = 0; i < num_chunks(); ++i) {
-            auto chunk_wrapper = GetGroupChunk(i);
-            total_rows += chunk_wrapper.get()->RowNums();
-        }
-        return total_rows;
+    NumRows(milvus::FieldId field_id) const {
+        AssertInfo(num_rows_map_.find(field_id) != num_rows_map_.end(),
+                   "FieldId {} not found in num_rows_map",
+                   std::to_string(field_id.get()));
+        return num_rows_map_.at(field_id);
     }
 
     // Get the number of rows in a specific group chunk
     int64_t
-    GetGroupChunkRowNums(size_t index) const {
-        if (index >= num_chunks()) {
+    GetNumRowsUntilChunk(milvus::FieldId field_id, int64_t chunk_id) const {
+        auto num_rows_until_chunk = GetNumRowsUntilChunk(field_id);
+        if (chunk_id >= num_rows_until_chunk.size()) {
             return 0;
         }
-        auto chunk_wrapper = GetGroupChunk(index);
-        return chunk_wrapper.get()->RowNums();
-    }
-
-    int64_t
-    GetNumRowsUntilChunk(int64_t chunk_id) const {
-        int64_t total_rows = 0;
-        for (int64_t i = 0; i < chunk_id; ++i) {
-            total_rows += GetGroupChunkRowNums(i);
-        }
-        return total_rows;
+        return num_rows_until_chunk[chunk_id];
     }
 
     const std::vector<int64_t>&
-    GetNumRowsUntilChunk() const {
-        static std::vector<int64_t> result;
-        result.clear();
-        result.reserve(num_chunks());
-        int64_t total_rows = 0;
-        for (int64_t i = 0; i < num_chunks(); ++i) {
-            result.push_back(total_rows);
-            total_rows += GetGroupChunkRowNums(i);
+    GetNumRowsUntilChunk(milvus::FieldId field_id) const {
+        if (num_rows_until_chunk_map_.empty()) {
+            auto fields_num_rows_until_chunk = FieldsNumRowsUntilChunk();
+            num_rows_until_chunk_map_ = fields_num_rows_until_chunk;
         }
-        return result;
+        AssertInfo(num_rows_until_chunk_map_.find(field_id) !=
+                       num_rows_until_chunk_map_.end(),
+                   "FieldId {} not found in GetNumRowsUntilChunk",
+                   std::to_string(field_id.get()));
+        return num_rows_until_chunk_map_.at(field_id);
+    }
+
+    const std::unordered_map<milvus::FieldId, std::vector<int64_t>>&
+    FieldsNumRowsUntilChunk() const {
+        auto meta =
+            static_cast<milvus::segcore::storagev2translator::GroupCTMeta*>(
+                slot_->meta());
+        return meta->num_rows_until_chunk_;
     }
 
     // Get the chunk for a specific column in a specific group chunk
@@ -123,6 +129,9 @@ class ChunkedColumnGroup {
  protected:
     mutable std::shared_ptr<CacheSlot<GroupChunk>> slot_;
     size_t num_chunks_{0};
+    std::unordered_map<milvus::FieldId, int64_t> num_rows_map_;
+    mutable std::unordered_map<milvus::FieldId, std::vector<int64_t>>
+        num_rows_until_chunk_map_;
 };
 
 class ProxyChunkColumn : public ChunkedColumnInterface {
@@ -165,7 +174,7 @@ class ProxyChunkColumn : public ChunkedColumnInterface {
 
     size_t
     NumRows() const override {
-        return group_->NumRows();
+        return group_->NumRows(field_id_);
     }
 
     int64_t
@@ -186,7 +195,7 @@ class ProxyChunkColumn : public ChunkedColumnInterface {
 
     int64_t
     chunk_row_nums(int64_t chunk_id) const override {
-        return group_->GetGroupChunkRowNums(chunk_id);
+        return group_->GetNumRowsUntilChunk(field_id_, chunk_id);
     }
 
     PinWrapper<SpanBase>
@@ -270,12 +279,12 @@ class ProxyChunkColumn : public ChunkedColumnInterface {
 
     int64_t
     GetNumRowsUntilChunk(int64_t chunk_id) const override {
-        return group_->GetNumRowsUntilChunk(chunk_id);
+        return group_->GetNumRowsUntilChunk(field_id_, chunk_id);
     }
 
     const std::vector<int64_t>&
     GetNumRowsUntilChunk() const override {
-        return group_->GetNumRowsUntilChunk();
+        return group_->GetNumRowsUntilChunk(field_id_);
     }
 
     const char*

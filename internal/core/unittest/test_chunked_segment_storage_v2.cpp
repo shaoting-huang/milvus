@@ -122,9 +122,11 @@ class TestChunkSegmentStorageV2 : public testing::TestWithParam<bool> {
                 if (arrow_schema->fields()[i]->type()->id() ==
                     arrow::Type::INT64) {
                     arrow::Int64Builder builder;
-                    builder.AppendValues(test_data.data(), test_data_count);
+                    auto status = builder.AppendValues(test_data.data(), test_data_count);
+                    EXPECT_TRUE(status.ok());
                     std::shared_ptr<arrow::Array> array;
-                    builder.Finish(&array);
+                    status = builder.Finish(&array);
+                    EXPECT_TRUE(status.ok());
                     arrays.push_back(array);
                 } else {
                     arrow::StringBuilder builder;
@@ -132,9 +134,11 @@ class TestChunkSegmentStorageV2 : public testing::TestWithParam<bool> {
                     for (int j = 0; j < test_data_count; j++) {
                         str_values.push_back(str_data[start_id + j]);
                     }
-                    builder.AppendValues(str_values);
+                    auto status = builder.AppendValues(str_values);
+                    EXPECT_TRUE(status.ok());
                     std::shared_ptr<arrow::Array> array;
-                    builder.Finish(&array);
+                    status = builder.Finish(&array);
+                    EXPECT_TRUE(status.ok());
                     arrays.push_back(array);
                 }
             }

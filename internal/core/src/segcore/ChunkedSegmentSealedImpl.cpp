@@ -196,6 +196,7 @@ ChunkedSegmentSealedImpl::LoadFieldData(const LoadFieldDataInfo& load_info) {
     switch (load_info.storage_version) {
         case 2:
             load_column_group_data_internal(load_info);
+            std::cout << "load_column_group_data_internal done" << std::endl;
             if (fields_.find(TimestampFieldID) != fields_.end()) {
                 auto timestamp_proxy_column = fields_.at(TimestampFieldID);
                 auto num_rows =
