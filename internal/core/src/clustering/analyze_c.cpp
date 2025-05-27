@@ -73,6 +73,7 @@ Analyze(CAnalyze* res_analyze,
             0, field_id, analyze_info->buildid(), analyze_info->version()};
         auto storage_config =
             get_storage_config(analyze_info->storage_config());
+        auto fs = milvus::storage::InitArrowFileSystem(storage_config);
         auto chunk_manager =
             milvus::storage::CreateChunkManager(storage_config);
 

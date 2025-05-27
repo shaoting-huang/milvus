@@ -249,6 +249,7 @@ CreateIndex(CIndex* res_index,
         auto status = CStatus();
         status.error_code = Success;
         status.error_msg = "";
+        milvus_storage::ArrowFileSystemSingleton::GetInstance().Release();
         return status;
     } catch (SegcoreError& e) {
         auto status = CStatus();
@@ -331,6 +332,7 @@ BuildJsonKeyIndex(ProtoLayoutInterface result,
         auto status = CStatus();
         status.error_code = Success;
         status.error_msg = "";
+        milvus_storage::ArrowFileSystemSingleton::GetInstance().Release();
         return status;
     } catch (SegcoreError& e) {
         auto status = CStatus();
@@ -412,6 +414,7 @@ BuildTextIndex(ProtoLayoutInterface result,
         auto status = CStatus();
         status.error_code = Success;
         status.error_msg = "";
+        milvus_storage::ArrowFileSystemSingleton::GetInstance().Release();
         return status;
     } catch (SegcoreError& e) {
         auto status = CStatus();

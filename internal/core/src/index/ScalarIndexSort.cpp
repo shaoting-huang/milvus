@@ -55,7 +55,10 @@ ScalarIndexSort<T>::Build(const Config& config) {
 
     auto lack_binlog_rows =
         GetValueFromConfig<int64_t>(config, "lack_binlog_rows");
-    if (lack_binlog_rows.has_value() && lack_binlog_rows.value() > 0) {
+    auto storage_version =
+        index::GetValueFromConfig<int64_t>(config, STORAGE_VERSION_KEY)
+            .value_or(0);
+    if (lack_binlog_rows.has_value() && lack_binlog_rows.value() > 0 && storage_version != STORAGE_V2) {
         auto field_schema = file_manager_->GetFieldDataMeta().field_schema;
         auto default_value = [&]() -> std::optional<DefaultValueType> {
             if (!field_schema.has_default_value()) {

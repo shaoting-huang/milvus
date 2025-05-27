@@ -18,6 +18,7 @@
 
 #include "arrow/array/array_binary.h"
 #include "arrow/chunked_array.h"
+#include "arrow/util/logging.h"
 #include "common/Array.h"
 #include "common/EasyAssert.h"
 #include "common/Exception.h"

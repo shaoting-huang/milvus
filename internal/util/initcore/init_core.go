@@ -35,9 +35,11 @@ import (
 	"unsafe"
 
 	"github.com/cockroachdb/errors"
+	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
@@ -129,7 +131,7 @@ func callWithTimeout(fn func(), timeoutHandler func(), timeout time.Duration) {
 
 func InitStorageV2FileSystem(params *paramtable.ComponentParam) error {
 	if params.CommonCfg.StorageType.GetValue() == "local" {
-		return InitLocalArrowFileSystem(params.LocalStorageCfg.Path.GetValue())
+		return InitLocalArrowFileSystem(params.MinioCfg.RootPath.GetValue())
 	}
 	return InitRemoteArrowFileSystem(params)
 }
@@ -187,7 +189,59 @@ func InitRemoteArrowFileSystem(params *paramtable.ComponentParam) error {
 	}
 
 	status := C.InitRemoteArrowFileSystemSingleton(storageConfig)
-	return HandleCStatus(&status, "InitRemoteChunkManagerSingleton failed")
+	return HandleCStatus(&status, "InitRemoteArrowFileSystemSingleton failed")
+}
+
+func InitRemoteArrowFileSystemWithStorageConfig(config *indexpb.StorageConfig) error {
+	log.Info("InitRemoteArrowFileSystemWithStorageConfig", zap.Any("config", config))
+	cAddress := C.CString(config.GetAddress())
+	cBucketName := C.CString(config.GetBucketName())
+	cAccessKey := C.CString(config.GetAccessKeyID())
+	cAccessValue := C.CString(config.GetSecretAccessKey())
+	cRootPath := C.CString(config.GetRootPath())
+	cStorageType := C.CString(config.GetStorageType())
+	cIamEndPoint := C.CString(config.GetIAMEndpoint())
+	cCloudProvider := C.CString(config.GetCloudProvider())
+	cLogLevel := C.CString("warn")
+	cRegion := C.CString(config.GetRegion())
+	cSslCACert := C.CString(config.GetSslCACert())
+	cGcpCredentialJSON := C.CString(config.GetGcpCredentialJSON())
+	defer C.free(unsafe.Pointer(cAddress))
+	defer C.free(unsafe.Pointer(cBucketName))
+	defer C.free(unsafe.Pointer(cAccessKey))
+	defer C.free(unsafe.Pointer(cAccessValue))
+	defer C.free(unsafe.Pointer(cRootPath))
+	defer C.free(unsafe.Pointer(cStorageType))
+	defer C.free(unsafe.Pointer(cIamEndPoint))
+	defer C.free(unsafe.Pointer(cLogLevel))
+	defer C.free(unsafe.Pointer(cRegion))
+	defer C.free(unsafe.Pointer(cCloudProvider))
+	defer C.free(unsafe.Pointer(cSslCACert))
+	defer C.free(unsafe.Pointer(cGcpCredentialJSON))
+	storageConfig := C.CStorageConfig{
+		address:                cAddress,
+		bucket_name:            cBucketName,
+		access_key_id:          cAccessKey,
+		access_key_value:       cAccessValue,
+		root_path:              cRootPath,
+		storage_type:           cStorageType,
+		iam_endpoint:           cIamEndPoint,
+		cloud_provider:         cCloudProvider,
+		log_level:              cLogLevel,
+		useSSL:                 C.bool(config.GetUseSSL()),
+		sslCACert:              cSslCACert,
+		useIAM:                 C.bool(config.GetUseIAM()),
+		region:                 cRegion,
+		useVirtualHost:         C.bool(config.GetUseVirtualHost()),
+		gcp_credential_json:    cGcpCredentialJSON,
+		use_custom_part_upload: true,
+	}
+	if config.GetRequestTimeoutMs() > 0 {
+		storageConfig.requestTimeoutMs = C.int64_t(config.GetRequestTimeoutMs())
+	}
+
+	status := C.InitRemoteArrowFileSystemSingleton(storageConfig)
+	return HandleCStatus(&status, "InitRemoteArrowFileSystemSingleton failed")
 }
 
 func InitRemoteChunkManager(params *paramtable.ComponentParam) error {

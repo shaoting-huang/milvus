@@ -164,6 +164,14 @@ func (st *statsTask) PreExecute(ctx context.Context) error {
 		zap.Int64("segmentID", st.req.GetSegmentID()),
 		zap.Int64("preExecuteRecordSpan(ms)", preExecuteRecordSpan.Milliseconds()),
 	)
+
+	// log.Ctx(ctx).Info("InitRemoteArrowFileSystemWithStorageConfig", zap.Any("storageConfig", st.req.StorageConfig))
+
+	// err := initcore.InitRemoteArrowFileSystemWithStorageConfig(st.req.StorageConfig)
+	// if err != nil {
+	// 	log.Ctx(ctx).Warn("InitRemoteArrowFileSystemWithStorageConfig failed", zap.Error(err))
+	// 	return err
+	// }
 	return nil
 }
 
@@ -189,6 +197,7 @@ func (st *statsTask) sort(ctx context.Context) ([]*datapb.FieldBinlog, error) {
 			return st.binlogIO.Upload(ctx, kvs)
 		}),
 		storage.WithVersion(st.req.GetStorageVersion()),
+		storage.WithStorageConfig(st.req.GetStorageConfig()),
 	)
 	if err != nil {
 		log.Ctx(ctx).Warn("sort segment wrong, unable to init segment writer",
@@ -234,6 +243,7 @@ func (st *statsTask) sort(ctx context.Context) ([]*datapb.FieldBinlog, error) {
 		storage.WithVersion(st.req.StorageVersion),
 		storage.WithDownloader(st.binlogIO.Download),
 		storage.WithBucketName(st.req.StorageConfig.BucketName),
+		storage.WithStorageConfig(st.req.StorageConfig),
 	)
 	if err != nil {
 		log.Warn("error creating insert binlog reader", zap.Error(err))

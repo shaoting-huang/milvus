@@ -91,7 +91,7 @@ func (suite *PackedTestSuite) TestPackedOneFile() {
 	err = pw.Close()
 	suite.NoError(err)
 
-	reader, err := NewPackedReader(paths, suite.schema, bufferSize)
+	reader, err := NewPackedReader(paths, suite.schema, bufferSize, nil)
 	suite.NoError(err)
 	rr, err := reader.ReadNext()
 	suite.NoError(err)
@@ -143,7 +143,7 @@ func (suite *PackedTestSuite) TestPackedMultiFiles() {
 	err = pw.Close()
 	suite.NoError(err)
 
-	reader, err := NewPackedReader(paths, suite.schema, bufferSize)
+	reader, err := NewPackedReader(paths, suite.schema, bufferSize, nil)
 	suite.NoError(err)
 	var rows int64 = 0
 	var rr arrow.Record

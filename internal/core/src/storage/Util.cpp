@@ -20,6 +20,7 @@
 #include "arrow/array/builder_binary.h"
 #include "arrow/scalar.h"
 #include "arrow/type_fwd.h"
+#include "common/Types.h"
 #include "fmt/format.h"
 #include "log/Log.h"
 
