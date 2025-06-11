@@ -237,6 +237,7 @@ func (st *statsTask) sort(ctx context.Context) ([]*datapb.FieldBinlog, error) {
 		storage.WithDownloader(st.binlogIO.Download),
 		storage.WithBucketName(st.req.StorageConfig.BucketName),
 		storage.WithStorageConfig(st.req.GetStorageConfig()),
+		storage.WithBufferSize(-1),
 	)
 	if err != nil {
 		log.Warn("error creating insert binlog reader", zap.Error(err))

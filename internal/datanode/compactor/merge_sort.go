@@ -69,6 +69,7 @@ func mergeSortMultipleSegments(ctx context.Context,
 			storage.WithDownloader(binlogIO.Download),
 			storage.WithVersion(s.StorageVersion),
 			storage.WithBucketName(bucketName),
+			storage.WithBufferSize(-1),
 		)
 		if err != nil {
 			return nil, err

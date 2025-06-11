@@ -35,6 +35,7 @@ import (
 	"github.com/milvus-io/milvus/internal/flushcommon/io"
 	"github.com/milvus-io/milvus/internal/metastore/kv/binlog"
 	"github.com/milvus-io/milvus/internal/storage"
+	"github.com/milvus-io/milvus/internal/storagev2/packed"
 	"github.com/milvus-io/milvus/pkg/v2/common"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
@@ -226,6 +227,7 @@ func (t *mixCompactionTask) writeSegment(ctx context.Context,
 		storage.WithDownloader(t.binlogIO.Download),
 		storage.WithVersion(seg.GetStorageVersion()),
 		storage.WithBucketName(bucketName),
+		storage.WithBufferSize(-1),
 	)
 	if err != nil {
 		log.Warn("compact wrong, failed to new insert binlogs reader", zap.Error(err))
