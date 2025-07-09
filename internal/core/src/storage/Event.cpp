@@ -329,6 +329,7 @@ BaseEventData::Serialize() {
                 break;
             }
             default: {
+                ARROW_LOG(INFO) << "!!!get_dim() called in Event.cpp:332";
                 auto payload =
                     Payload{data_type,
                             static_cast<const uint8_t*>(field_data->Data()),
@@ -418,6 +419,7 @@ DescriptorEvent::Serialize() {
 std::vector<uint8_t>
 LocalInsertEvent::Serialize() {
     int row_num = field_data->get_num_rows();
+    ARROW_LOG(INFO) << "!!!get_dim() called in Event.cpp:421";
     int dimension = field_data->get_dim();
     int data_size = field_data->DataSize();
     int valid_data_size = field_data->ValidDataSize();

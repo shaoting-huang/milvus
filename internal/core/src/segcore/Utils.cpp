@@ -343,6 +343,7 @@ CreateEmptyVectorDataArray(int64_t count, const FieldMeta& field_meta) {
     auto vector_array = data_array->mutable_vectors();
     auto dim = 0;
     if (data_type != DataType::VECTOR_SPARSE_FLOAT) {
+        ARROW_LOG(INFO) << "!!!get_dim() called in Utils.cpp:346";
         dim = field_meta.get_dim();
         vector_array->set_dim(dim);
     }
@@ -510,6 +511,7 @@ CreateVectorDataArrayFrom(const void* data_raw,
     auto vector_array = data_array->mutable_vectors();
     auto dim = 0;
     if (!IsSparseFloatVectorDataType(data_type)) {
+        ARROW_LOG(INFO) << "!!!get_dim() called in Utils.cpp:513";
         dim = field_meta.get_dim();
         vector_array->set_dim(dim);
     }
@@ -629,6 +631,7 @@ MergeDataArray(std::vector<MergeBase>& merge_bases,
             auto vector_array = data_array->mutable_vectors();
             auto dim = 0;
             if (!IsSparseFloatVectorDataType(data_type)) {
+                ARROW_LOG(INFO) << "!!!get_dim() called in Utils.cpp:632";
                 dim = field_meta.get_dim();
                 vector_array->set_dim(dim);
             }

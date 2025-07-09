@@ -23,6 +23,7 @@
 
 #include "common/EasyAssert.h"
 #include "common/Types.h"
+#include "arrow/util/logging.h"
 
 namespace milvus {
 using TypeParams = std::map<std::string, std::string>;
@@ -240,6 +241,7 @@ class FieldMeta {
         if (type_ == DataType::VECTOR_ARRAY) {
             return VECTOR_ARRAY_SIZE;
         } else if (is_vector()) {
+             ARROW_LOG(INFO) << "!!!get_dim() called in FieldMeta.h:245";
             return GetDataTypeSize(type_, get_dim());
         } else if (is_string()) {
             Assert(string_info_.has_value());

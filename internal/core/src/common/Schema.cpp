@@ -86,6 +86,7 @@ Schema::ConvertToArrowSchema() const {
     arrow::FieldVector arrow_fields;
     for (auto& field : fields_) {
         auto meta = field.second;
+         ARROW_LOG(INFO) << "!!!get_dim() called in Schema.cpp:89";
         int dim = IsVectorDataType(meta.get_data_type()) &&
                           !IsSparseFloatVectorDataType(meta.get_data_type())
                       ? meta.get_dim()

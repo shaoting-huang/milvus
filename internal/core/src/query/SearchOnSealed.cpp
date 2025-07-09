@@ -41,6 +41,7 @@ SearchOnSealedIndex(const Schema& schema,
     auto& field = schema[field_id];
     auto is_sparse = field.get_data_type() == DataType::VECTOR_SPARSE_FLOAT;
     // TODO(SPARSE): see todo in PlanImpl.h::PlaceHolder.
+    ARROW_LOG(INFO) << "!!!get_dim() called in SearchOnSealed.cpp:45";
     auto dim = is_sparse ? 0 : field.get_dim();
 
     AssertInfo(record.is_ready(field_id), "[SearchOnSealed]Record isn't ready");
@@ -102,6 +103,7 @@ SearchOnSealedColumn(const Schema& schema,
     auto& field = schema[field_id];
 
     // TODO(SPARSE): see todo in PlanImpl.h::PlaceHolder.
+    ARROW_LOG(INFO) << "!!!get_dim() called in SearchOnSealed.cpp:107";
     auto dim = field.get_data_type() == DataType::VECTOR_SPARSE_FLOAT
                    ? 0
                    : field.get_dim();

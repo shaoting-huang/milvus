@@ -453,6 +453,7 @@ DiskFileManagerImpl::cache_raw_data_to_disk_common(
             write_offset += row_byte_size;
         }
     } else {
+        ARROW_LOG(INFO) << "!!!get_dim() called in DiskFileManagerImpl.cpp:456";
         dim = field_data->get_dim();
         auto data_size =
             field_data->get_num_rows() * milvus::GetVecRowSize<DataType>(dim);
