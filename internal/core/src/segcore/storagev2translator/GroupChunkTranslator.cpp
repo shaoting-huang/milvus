@@ -134,6 +134,8 @@ GroupChunkTranslator::get_cells(const std::vector<cachinglayer::cid_t>& cids) {
                           std::unique_ptr<milvus::GroupChunk>>>
         cells;
     cells.reserve(cids.size());
+    // log the cids
+    LOG_INFO("cids: {}", fmt::join(cids, ", "));
 
     // Create row group lists for requested cids
     std::vector<std::vector<int64_t>> row_group_lists;
@@ -146,6 +148,9 @@ GroupChunkTranslator::get_cells(const std::vector<cachinglayer::cid_t>& cids) {
         auto [file_idx, row_group_idx] = get_file_and_row_group_index(cid);
         row_group_lists[file_idx].push_back(row_group_idx);
     }
+
+    // log the row_group_lists
+    LOG_INFO("row_group_lists: {}", fmt::join(row_group_lists, ", "));
 
     auto parallel_degree =
         static_cast<uint64_t>(DEFAULT_FIELD_MAX_MEMORY_LIMIT / FILE_SLICE_SIZE);
