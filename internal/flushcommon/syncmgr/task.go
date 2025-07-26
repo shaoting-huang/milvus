@@ -86,6 +86,9 @@ type SyncTask struct {
 	// storage config used in pooled tasks, optional
 	// use singleton config for non-pooled tasks
 	storageConfig *indexpb.StorageConfig
+
+	// sequence of column group ids for storage v2 format
+	columnGroupIDs []int64
 }
 
 func (t *SyncTask) getLogger() *log.MLogger {
@@ -133,7 +136,7 @@ func (t *SyncTask) Run(ctx context.Context) (err error) {
 	case storage.StorageV2:
 		writer := NewBulkPackWriterV2(t.metacache, t.schema, t.chunkManager, t.allocator, t.syncBufferSize,
 			t.multiPartUploadSize, t.storageConfig, t.writeRetryOpts...)
-		t.insertBinlogs, t.deltaBinlog, t.statsBinlogs, t.bm25Binlogs, t.flushedSize, err = writer.Write(ctx, t.pack)
+		t.insertBinlogs, t.deltaBinlog, t.statsBinlogs, t.bm25Binlogs, t.columnGroupIDs, t.flushedSize, err = writer.Write(ctx, t.pack)
 		if err != nil {
 			log.Warn("failed to write sync data with storage v2 format", zap.Error(err))
 			return err

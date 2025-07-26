@@ -29,6 +29,7 @@ import "C"
 import (
 	"unsafe"
 
+	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 )
 
@@ -40,4 +41,13 @@ func ConsumeCStatusIntoError(status *C.CStatus) error {
 	errorMsg := C.GoString(status.error_msg)
 	C.free(unsafe.Pointer(status.error_msg))
 	return merr.SegcoreError(int32(errorCode), errorMsg)
+}
+
+func GenFieldBinlogsSequence(columnGroupIDs []int64, insertBinlogs map[int64]*datapb.FieldBinlog) []*datapb.FieldBinlog {
+	// should follow the order of column group ids for storage v2 format
+	binlogs := make([]*datapb.FieldBinlog, 0)
+	for _, columnGroupID := range columnGroupIDs {
+		binlogs = append(binlogs, insertBinlogs[columnGroupID])
+	}
+	return binlogs
 }

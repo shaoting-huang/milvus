@@ -72,6 +72,7 @@ func (bw *BulkPackWriterV2) Write(ctx context.Context, pack *SyncPack) (
 	deltas *datapb.FieldBinlog,
 	stats map[int64]*datapb.FieldBinlog,
 	bm25Stats map[int64]*datapb.FieldBinlog,
+	columnGroupIDs []int64,
 	size int64,
 	err error,
 ) {
@@ -81,7 +82,7 @@ func (bw *BulkPackWriterV2) Write(ctx context.Context, pack *SyncPack) (
 		return
 	}
 
-	if inserts, err = bw.writeInserts(ctx, pack); err != nil {
+	if inserts, columnGroupIDs, err = bw.writeInserts(ctx, pack); err != nil {
 		log.Error("failed to write insert data", zap.Error(err))
 		return
 	}
@@ -113,22 +114,24 @@ func (bw *BulkPackWriterV2) getRootPath() string {
 	return bw.chunkManager.RootPath()
 }
 
-func (bw *BulkPackWriterV2) writeInserts(ctx context.Context, pack *SyncPack) (map[int64]*datapb.FieldBinlog, error) {
+func (bw *BulkPackWriterV2) writeInserts(ctx context.Context, pack *SyncPack) (map[int64]*datapb.FieldBinlog, []int64, error) {
 	if len(pack.insertData) == 0 {
-		return make(map[int64]*datapb.FieldBinlog), nil
+		return make(map[int64]*datapb.FieldBinlog), nil, nil
 	}
 	columnGroups := storagecommon.SplitBySchema(bw.schema.GetFields())
 
 	rec, err := bw.serializeBinlog(ctx, pack)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	logs := make(map[int64]*datapb.FieldBinlog)
 	paths := make([]string, 0)
-	for _, columnGroup := range columnGroups {
+	columnGroupIDs := make([]int64, len(columnGroups))
+	for i, columnGroup := range columnGroups {
 		path := metautil.BuildInsertLogPath(bw.getRootPath(), pack.collectionID, pack.partitionID, pack.segmentID, columnGroup.GroupID, bw.nextID())
 		paths = append(paths, path)
+		columnGroupIDs[i] = columnGroup.GroupID
 	}
 	tsArray := rec.Column(common.TimeStampField).(*array.Int64)
 	rows := rec.Len()
@@ -148,10 +151,10 @@ func (bw *BulkPackWriterV2) writeInserts(ctx context.Context, pack *SyncPack) (m
 
 	w, err := storage.NewPackedRecordWriter(bucketName, paths, bw.schema, bw.bufferSize, bw.multiPartUploadSize, columnGroups, bw.storageConfig)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err = w.Write(rec); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for _, columnGroup := range columnGroups {
 		columnGroupID := columnGroup.GroupID
@@ -170,9 +173,9 @@ func (bw *BulkPackWriterV2) writeInserts(ctx context.Context, pack *SyncPack) (m
 		}
 	}
 	if err = w.Close(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return logs, nil
+	return logs, columnGroupIDs, nil
 }
 
 func (bw *BulkPackWriterV2) serializeBinlog(ctx context.Context, pack *SyncPack) (storage.Record, error) {

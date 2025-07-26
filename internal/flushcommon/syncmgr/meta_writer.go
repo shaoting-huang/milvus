@@ -10,6 +10,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/internal/flushcommon/broker"
 	"github.com/milvus-io/milvus/internal/flushcommon/metacache"
+	"github.com/milvus-io/milvus/internal/storagev2/packed"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
@@ -44,7 +45,12 @@ func (b *brokerMetaWriter) UpdateSync(ctx context.Context, pack *SyncTask) error
 		deltaBm25StatsBinlogs []*datapb.FieldBinlog = nil
 	)
 
-	insertFieldBinlogs := lo.MapToSlice(pack.insertBinlogs, func(_ int64, fieldBinlog *datapb.FieldBinlog) *datapb.FieldBinlog { return fieldBinlog })
+	insertFieldBinlogs := make([]*datapb.FieldBinlog, 0)
+	if pack.columnGroupIDs != nil {
+		insertFieldBinlogs = packed.GenFieldBinlogsSequence(pack.columnGroupIDs, pack.insertBinlogs)
+	} else {
+		insertFieldBinlogs = lo.MapToSlice(pack.insertBinlogs, func(_ int64, fieldBinlog *datapb.FieldBinlog) *datapb.FieldBinlog { return fieldBinlog })
+	}
 	statsFieldBinlogs := lo.MapToSlice(pack.statsBinlogs, func(_ int64, fieldBinlog *datapb.FieldBinlog) *datapb.FieldBinlog { return fieldBinlog })
 	if pack.deltaBinlog != nil && len(pack.deltaBinlog.Binlogs) > 0 {
 		deltaFieldBinlogs = append(deltaFieldBinlogs, pack.deltaBinlog)

@@ -84,7 +84,7 @@ func (s *ClusteringCompactionTaskStorageV2Suite) TestScalarCompactionNormal() {
 func (s *ClusteringCompactionTaskStorageV2Suite) TestScalarCompactionNormal_V2ToV2Format() {
 	var segmentID int64 = 1001
 
-	fBinlogs, deltalogs, _, _, _, err := s.initStorageV2Segments(10240, segmentID)
+	fBinlogs, deltalogs, _, _, columnGroupIDs, _, err := s.initStorageV2Segments(10240, segmentID)
 	s.NoError(err)
 
 	dblobs, err := getInt64DeltaBlobs(
@@ -99,7 +99,7 @@ func (s *ClusteringCompactionTaskStorageV2Suite) TestScalarCompactionNormal_V2To
 	s.task.plan.SegmentBinlogs = []*datapb.CompactionSegmentBinlogs{
 		{
 			SegmentID:      segmentID,
-			FieldBinlogs:   lo.Values(fBinlogs),
+			FieldBinlogs:   packed.GenFieldBinlogsSequence(columnGroupIDs, fBinlogs),
 			Deltalogs:      []*datapb.FieldBinlog{deltalogs},
 			StorageVersion: storage.StorageV2,
 		},
@@ -146,7 +146,7 @@ func (s *ClusteringCompactionTaskStorageV2Suite) TestScalarCompactionNormal_V2To
 
 	var segmentID int64 = 1001
 
-	fBinlogs, deltalogs, _, _, _, err := s.initStorageV2Segments(10240, segmentID)
+	fBinlogs, deltalogs, _, _, columnGroupIDs, _, err := s.initStorageV2Segments(10240, segmentID)
 	s.NoError(err)
 
 	dblobs, err := getInt64DeltaBlobs(
@@ -161,7 +161,7 @@ func (s *ClusteringCompactionTaskStorageV2Suite) TestScalarCompactionNormal_V2To
 	s.task.plan.SegmentBinlogs = []*datapb.CompactionSegmentBinlogs{
 		{
 			SegmentID:      segmentID,
-			FieldBinlogs:   lo.Values(fBinlogs),
+			FieldBinlogs:   packed.GenFieldBinlogsSequence(columnGroupIDs, fBinlogs),
 			Deltalogs:      []*datapb.FieldBinlog{deltalogs},
 			StorageVersion: storage.StorageV2,
 		},
@@ -259,6 +259,7 @@ func (s *ClusteringCompactionTaskStorageV2Suite) initStorageV2Segments(rows int,
 	deltas *datapb.FieldBinlog,
 	stats map[int64]*datapb.FieldBinlog,
 	bm25Stats map[int64]*datapb.FieldBinlog,
+	columnGroupIDs []int64,
 	size int64,
 	err error,
 ) {
