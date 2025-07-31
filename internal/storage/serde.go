@@ -18,12 +18,14 @@ package storage
 
 import (
 	"fmt"
-	"github.com/milvus-io/milvus/pkg/v2/log"
-	"go.uber.org/zap"
 	"io"
 	"math"
+	"runtime"
 	"strconv"
 	"strings"
+
+	"github.com/milvus-io/milvus/pkg/v2/log"
+	"go.uber.org/zap"
 
 	"github.com/apache/arrow/go/v17/arrow"
 	"github.com/apache/arrow/go/v17/arrow/array"
@@ -859,6 +861,7 @@ func (sw *SerializeWriterImpl[T]) WriteValue(value T) error {
 	sw.buffer[sw.pos] = value
 	sw.pos++
 	if sw.pos == sw.batchSize {
+		defer runtime.GC()
 		if err := sw.Flush(); err != nil {
 			return err
 		}
