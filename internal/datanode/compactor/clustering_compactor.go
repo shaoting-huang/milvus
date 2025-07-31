@@ -647,7 +647,7 @@ func (t *clusteringCompactionTask) mappingSegment(
 				return err
 			}
 
-			log.Debug("read next record", zap.Int("record len", r.Len()))
+			log.Info("mapping segment read next record", zap.Int64("segmentID", segment.GetSegmentID()), zap.Int("record len", r.Len()))
 
 			for _, v := range vs {
 				offset++
@@ -679,7 +679,7 @@ func (t *clusteringCompactionTask) mappingSegment(
 					currentBufferTotalMemorySize := t.getBufferTotalUsedMemorySize()
 					if currentBufferTotalMemorySize > t.getMemoryBufferHighWatermark() {
 						// reach flushBinlog trigger threshold
-						log.Debug("largest buffer need to flush",
+						log.Info("largest buffer need to flush",
 							zap.Int64("currentBufferTotalMemorySize", currentBufferTotalMemorySize))
 						if err := t.flushLargestBuffers(ctx); err != nil {
 							return err

@@ -31,12 +31,15 @@ import (
 	"github.com/apache/arrow/go/v17/arrow"
 	"github.com/apache/arrow/go/v17/arrow/cdata"
 	"github.com/cockroachdb/errors"
+	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/internal/storagecommon"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 )
 
 func NewPackedWriter(filePaths []string, schema *arrow.Schema, bufferSize int64, multiPartUploadSize int64, columnGroups []storagecommon.ColumnGroup, storageConfig *indexpb.StorageConfig) (*PackedWriter, error) {
+	log.Info("new packed writer", zap.Any("file paths", filePaths), zap.Any("schema", schema), zap.Any("buffer size", bufferSize), zap.Any("multi part upload size", multiPartUploadSize), zap.Any("column groups", columnGroups), zap.Any("storage config", storageConfig))
 	cFilePaths := make([]*C.char, len(filePaths))
 	for i, path := range filePaths {
 		cFilePaths[i] = C.CString(path)
@@ -114,6 +117,11 @@ func NewPackedWriter(filePaths []string, schema *arrow.Schema, bufferSize int64,
 }
 
 func (pw *PackedWriter) WriteRecordBatch(recordBatch arrow.Record) error {
+	size := uint64(0)
+	for _, arr := range recordBatch.Columns() {
+		size += arr.Data().SizeInBytes()
+	}
+	log.Info("write record batch", zap.Any("record batch size", recordBatch.NumRows()), zap.Any("memory size", size))
 	var caa cdata.CArrowArray
 	var cas cdata.CArrowSchema
 
