@@ -34,6 +34,7 @@
 #include <unordered_map>
 #include <set>
 #include <algorithm>
+#include <chrono>
 
 #include "arrow/type.h"
 #include "arrow/type_fwd.h"
@@ -217,21 +218,31 @@ GroupChunkTranslator::get_cid_from_file_and_row_group_index(
 // the returned cids are sorted. It may not follow the order of cids.
 std::vector<std::pair<cachinglayer::cid_t, std::unique_ptr<milvus::GroupChunk>>>
 GroupChunkTranslator::get_cells(const std::vector<cachinglayer::cid_t>& cids) {
+    auto start_time = std::chrono::steady_clock::now();
+    
     std::vector<std::pair<milvus::cachinglayer::cid_t,
                           std::unique_ptr<milvus::GroupChunk>>>
         cells;
     cells.reserve(cids.size());
 
     // Create row group lists for requested cids
+    auto prepare_start = std::chrono::steady_clock::now();
     std::vector<std::vector<int64_t>> row_group_lists(insert_files_.size());
 
     for (auto cid : cids) {
         auto [file_idx, row_group_idx] = get_file_and_row_group_index(cid);
         row_group_lists[file_idx].push_back(row_group_idx);
     }
+    auto prepare_end = std::chrono::steady_clock::now();
+    auto prepare_duration = std::chrono::duration_cast<std::chrono::microseconds>(
+        prepare_end - prepare_start).count();
+    LOG_INFO(
+        "[StorageV2] translator {} prepare row group lists for {} cids, cost {} us",
+        key_,
+        cids.size(),
+        prepare_duration);
 
-    auto parallel_degree =
-        static_cast<uint64_t>(DEFAULT_FIELD_MAX_MEMORY_LIMIT / FILE_SLICE_SIZE);
+    auto parallel_degree = 1;
     auto strategy =
         std::make_unique<ParallelDegreeSplitStrategy>(parallel_degree);
 
@@ -240,6 +251,7 @@ GroupChunkTranslator::get_cells(const std::vector<cachinglayer::cid_t>& cids) {
     auto fs = milvus_storage::ArrowFileSystemSingleton::GetInstance()
                   .GetArrowFileSystem();
 
+    auto submit_start = std::chrono::steady_clock::now();
     auto load_future = pool.Submit([&]() {
         return LoadWithStrategy(insert_files_,
                                 channel,
@@ -250,12 +262,17 @@ GroupChunkTranslator::get_cells(const std::vector<cachinglayer::cid_t>& cids) {
                                 nullptr,
                                 load_priority_);
     });
+    auto submit_end = std::chrono::steady_clock::now();
+    auto submit_duration = std::chrono::duration_cast<std::chrono::microseconds>(
+        submit_end - submit_start).count();
     LOG_INFO(
         "[StorageV2] translator {} submits load column group {} task to thread "
-        "pool",
+        "pool, cost {} us",
         key_,
-        column_group_info_.field_id);
+        column_group_info_.field_id,
+        submit_duration);
 
+    auto process_start = std::chrono::steady_clock::now();
     std::shared_ptr<milvus::ArrowDataWrapper> r;
     std::unordered_set<cachinglayer::cid_t> filled_cids;
     filled_cids.reserve(cids.size());
@@ -268,9 +285,24 @@ GroupChunkTranslator::get_cells(const std::vector<cachinglayer::cid_t>& cids) {
             filled_cids.insert(cid);
         }
     }
+    auto process_end = std::chrono::steady_clock::now();
+    auto process_duration = std::chrono::duration_cast<std::chrono::microseconds>(
+        process_end - process_start).count();
+    LOG_INFO(
+        "[StorageV2] translator {} process loaded data, cost {} us",
+        key_,
+        process_duration);
 
     // access underlying feature to get exception if any
+    auto wait_start = std::chrono::steady_clock::now();
     load_future.get();
+    auto wait_end = std::chrono::steady_clock::now();
+    auto wait_duration = std::chrono::duration_cast<std::chrono::microseconds>(
+        wait_end - wait_start).count();
+    LOG_INFO(
+        "[StorageV2] translator {} wait for load task complete, cost {} us",
+        key_,
+        wait_duration);
 
     // Verify all requested cids have been filled
     for (auto cid : cids) {
@@ -281,6 +313,17 @@ GroupChunkTranslator::get_cells(const std::vector<cachinglayer::cid_t>& cids) {
                    cid,
                    cid);
     }
+    
+    auto end_time = std::chrono::steady_clock::now();
+    auto total_duration = std::chrono::duration_cast<std::chrono::microseconds>(
+        end_time - start_time).count();
+    LOG_INFO(
+        "[StorageV2] translator {} get_cells total cost {} us ({} ms) for {} cids",
+        key_,
+        total_duration,
+        total_duration / 1000.0,
+        cids.size());
+    
     return cells;
 }
 
