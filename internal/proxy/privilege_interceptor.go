@@ -90,9 +90,50 @@ func PrivilegeInterceptor(ctx context.Context, req interface{}) (context.Context
 		zap.Int32("object_index", objectNameIndex), zap.String("object_name", objectName),
 		zap.Int32("object_indexs", objectNameIndexs), zap.Strings("object_names", objectNames))
 
+	// Resolve entity IDs for ID-based authorization (v2).
+	// This maps objectName -> entityID for collection-type resources.
+	entityIDCache := make(map[string]int64)
+	resolveEntityID := func(objName string) int64 {
+		if objName == util.AnyWord || objectType != commonpb.ObjectType_Collection.String() {
+			return 0
+		}
+		if id, ok := entityIDCache[objName]; ok {
+			return id
+		}
+		id, err := globalMetaCache.GetCollectionID(ctx, dbName, objName)
+		if err != nil {
+			log.RatedDebug(60, "resolveEntityID: collection ID lookup failed, skipping ID-based check",
+				zap.String("db", dbName), zap.String("collection", objName))
+			entityIDCache[objName] = 0
+			return 0
+		}
+		entityIDCache[objName] = id
+		return id
+	}
+
 	e := privilege.GetEnforcer()
 	for _, roleName := range roleNames {
 		permitFunc := func(objectName string) (bool, error) {
+			// Try v2 (ID-based) enforcement first.
+			entityID := resolveEntityID(objectName)
+			if entityID > 0 {
+				idObject := funcutil.PolicyForResourceByID(objectType, entityID)
+				isPermit, cached, version := privilege.GetResultCache(roleName, idObject, objectPrivilege)
+				if cached {
+					// v2 result is authoritative when entityID is resolved — do not fall back to v1.
+					return isPermit, nil
+				}
+				isPermit, err := e.Enforce(roleName, idObject, objectPrivilege)
+				if err != nil {
+					return false, err
+				}
+				privilege.SetResultCache(roleName, idObject, objectPrivilege, isPermit, version)
+				// v2 result is authoritative when entityID is resolved — do not fall back to v1.
+				return isPermit, nil
+			}
+
+			// v1 (name-based) fallback only when entity ID cannot be resolved
+			// (e.g., Global/User types, wildcard grants, or collection not found).
 			object := funcutil.PolicyForResource(dbName, objectType, objectName)
 			isPermit, cached, version := privilege.GetResultCache(roleName, object, objectPrivilege)
 			if cached {

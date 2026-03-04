@@ -1328,6 +1328,108 @@ func (kc *Catalog) AlterGrant(ctx context.Context, tenant string, entity *milvus
 	return common.NewIgnorableError(fmt.Errorf("the privilege[%s] has been granted", privilegeName))
 }
 
+// v2GrantValue encodes metadata for v2 grant storage.
+// Format: "granteeID|dbName|objectName"
+func encodeV2GrantValue(granteeID, dbName, objectName string) string {
+	return fmt.Sprintf("%s|%s|%s", granteeID, dbName, objectName)
+}
+
+func decodeV2GrantValue(value string) (granteeID, dbName, objectName string, ok bool) {
+	parts := strings.SplitN(value, "|", 3)
+	if len(parts) != 3 {
+		return "", "", "", false
+	}
+	return parts[0], parts[1], parts[2], true
+}
+
+func (kc *Catalog) AlterGrantV2(ctx context.Context, tenant string, entity *milvuspb.GrantEntity, operateType milvuspb.OperatePrivilegeType, entityID int64) error {
+	// Always perform v1 write for backward compatibility.
+	if err := kc.AlterGrant(ctx, tenant, entity, operateType); err != nil {
+		return err
+	}
+
+	// Skip v2 write for wildcard grants, or when no entity ID is provided.
+	if entityID <= 0 || entity.ObjectName == util.AnyWord {
+		return nil
+	}
+
+	// v2 key: GranteeV2Prefix/<tenant>/<role>/<objectType>/<entityID>
+	entityIDStr := strconv.FormatInt(entityID, 10)
+	v2Key := funcutil.HandleTenantForEtcdKey(GranteeV2Prefix, tenant, fmt.Sprintf("%s/%s/%s", entity.Role.Name, entity.Object.Name, entityIDStr))
+
+	privilegeName := entity.Grantor.Privilege.Name
+
+	switch {
+	case funcutil.IsGrant(operateType):
+		// Load or create v2 grantee entry.
+		v2Val, err := kc.Txn.Load(ctx, v2Key)
+		var granteeID string
+		if err != nil {
+			if !errors.Is(err, merr.ErrIoKeyNotFound) {
+				return err
+			}
+			// Create new v2 entry with a grantee ID.
+			// Prefix with "v2-" to avoid collision with v1 grantee IDs in shared GranteeIDPrefix.
+			granteeID = "v2-" + crypto.MD5(v2Key)
+			v2Val = encodeV2GrantValue(granteeID, entity.DbName, entity.ObjectName)
+			if err := kc.Txn.Save(ctx, v2Key, v2Val); err != nil {
+				log.Ctx(ctx).Error("fail to save v2 grant key", zap.String("key", v2Key), zap.Error(err))
+				return err
+			}
+		} else {
+			granteeID, _, _, _ = decodeV2GrantValue(v2Val)
+		}
+
+		// Save the privilege under the v2 grantee ID.
+		privKey := funcutil.HandleTenantForEtcdKey(GranteeIDPrefix, tenant, fmt.Sprintf("%s/%s", granteeID, privilegeName))
+		if _, err := kc.Txn.Load(ctx, privKey); err != nil {
+			if !errors.Is(err, merr.ErrIoKeyNotFound) {
+				return err
+			}
+			if err := kc.Txn.Save(ctx, privKey, entity.Grantor.User.Name); err != nil {
+				log.Ctx(ctx).Error("fail to save v2 grantee id", zap.String("key", privKey), zap.Error(err))
+				return err
+			}
+		}
+
+	case funcutil.IsRevoke(operateType):
+		v2Val, err := kc.Txn.Load(ctx, v2Key)
+		if err != nil {
+			if errors.Is(err, merr.ErrIoKeyNotFound) {
+				// v2 entry doesn't exist, nothing to revoke.
+				return nil
+			}
+			return err
+		}
+		granteeID, _, _, _ := decodeV2GrantValue(v2Val)
+
+		// Remove the privilege under the v2 grantee ID.
+		privKey := funcutil.HandleTenantForEtcdKey(GranteeIDPrefix, tenant, fmt.Sprintf("%s/%s", granteeID, privilegeName))
+		if err := kc.Txn.Remove(ctx, privKey); err != nil {
+			if !errors.Is(err, merr.ErrIoKeyNotFound) {
+				log.Ctx(ctx).Error("fail to remove v2 grantee id", zap.String("key", privKey), zap.Error(err))
+				return err
+			}
+		}
+
+		// Check if there are remaining privileges for this v2 entry.
+		granteeIDKey := funcutil.HandleTenantForEtcdKey(GranteeIDPrefix, tenant, granteeID) + "/"
+		keys, _, err := kc.Txn.LoadWithPrefix(ctx, granteeIDKey)
+		if err != nil {
+			return err
+		}
+		if len(keys) == 0 {
+			// No more privileges, remove the v2 entry.
+			if err := kc.Txn.Remove(ctx, v2Key); err != nil {
+				log.Ctx(ctx).Error("fail to remove v2 grant key", zap.String("key", v2Key), zap.Error(err))
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
 func (kc *Catalog) ListGrant(ctx context.Context, tenant string, entity *milvuspb.GrantEntity) ([]*milvuspb.GrantEntity, error) {
 	var entities []*milvuspb.GrantEntity
 
@@ -1430,7 +1532,7 @@ func (kc *Catalog) DeleteGrant(ctx context.Context, tenant string, role *milvusp
 
 	removeKeys = append(removeKeys, k)
 
-	// the values are the grantee id list
+	// the values are the grantee id list (v1)
 	_, values, err := kc.Txn.LoadWithPrefix(ctx, k)
 	if err != nil {
 		log.Ctx(ctx).Warn("fail to load grant privilege entities", zap.String("key", k), zap.Error(err))
@@ -1441,6 +1543,20 @@ func (kc *Catalog) DeleteGrant(ctx context.Context, tenant string, role *milvusp
 		removeKeys = append(removeKeys, granteeIDKey)
 	}
 
+	// Also clean up v2 keys for this role.
+	v2Key := funcutil.HandleTenantForEtcdKey(GranteeV2Prefix, tenant, role.Name+"/")
+	_, v2Values, err := kc.Txn.LoadWithPrefix(ctx, v2Key)
+	if err == nil {
+		removeKeys = append(removeKeys, v2Key)
+		for _, v := range v2Values {
+			granteeID, _, _, ok := decodeV2GrantValue(v)
+			if ok {
+				granteeIDKey := funcutil.HandleTenantForEtcdKey(GranteeIDPrefix, tenant, granteeID+"/")
+				removeKeys = append(removeKeys, granteeIDKey)
+			}
+		}
+	}
+
 	if err = kc.Txn.MultiSaveAndRemoveWithPrefix(ctx, nil, removeKeys); err != nil {
 		log.Ctx(ctx).Error("fail to remove with the prefix", zap.String("key", k), zap.Error(err))
 	}
@@ -1449,6 +1565,8 @@ func (kc *Catalog) DeleteGrant(ctx context.Context, tenant string, role *milvusp
 
 func (kc *Catalog) ListPolicy(ctx context.Context, tenant string) ([]*milvuspb.GrantEntity, error) {
 	var grants []*milvuspb.GrantEntity
+
+	// Load v1 grants (name-based).
 	granteeKey := funcutil.HandleTenantForEtcdKey(GranteePrefix, tenant, "")
 	keys, values, err := kc.Txn.LoadWithPrefix(ctx, granteeKey)
 	if err != nil {
@@ -1493,6 +1611,83 @@ func (kc *Catalog) ListPolicy(ctx context.Context, tenant string) ([]*milvuspb.G
 			})
 		}
 	}
+
+	// Load v2 grants (entity-ID-based) and append as additional policies.
+	v2Grants, err := kc.listPolicyV2(ctx, tenant)
+	if err != nil {
+		log.Ctx(ctx).Error("fail to load v2 grant policies", zap.Error(err))
+		return grants, err
+	}
+	grants = append(grants, v2Grants...)
+
+	return grants, nil
+}
+
+// listPolicyV2 loads v2 entity-ID-based grants and returns them as GrantEntity objects
+// with ObjectName encoded as "ID:<entityID>" for ID-based policy generation.
+func (kc *Catalog) listPolicyV2(ctx context.Context, tenant string) ([]*milvuspb.GrantEntity, error) {
+	var grants []*milvuspb.GrantEntity
+
+	v2Key := funcutil.HandleTenantForEtcdKey(GranteeV2Prefix, tenant, "")
+	keys, values, err := kc.Txn.LoadWithPrefix(ctx, v2Key)
+	if err != nil {
+		if errors.Is(err, merr.ErrIoKeyNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	for i, key := range keys {
+		// Key format: .../<role>/<objectType>/<entityID>
+		keyInfos := typeutil.AfterN(key, v2Key+"/", "/")
+		if len(keyInfos) != 3 {
+			log.Ctx(ctx).Warn("invalid v2 grantee key", zap.String("key", key))
+			continue
+		}
+		roleName := keyInfos[0]
+		objectType := keyInfos[1]
+		entityIDStr := keyInfos[2]
+
+		// Decode value: granteeID|dbName|objectName
+		granteeID, _, _, ok := decodeV2GrantValue(values[i])
+		if !ok {
+			log.Ctx(ctx).Warn("invalid v2 grant value", zap.String("key", key), zap.String("value", values[i]))
+			continue
+		}
+
+		// Load privileges for this v2 grantee.
+		granteeIDKey := funcutil.HandleTenantForEtcdKey(GranteeIDPrefix, tenant, granteeID)
+		idKeys, _, err := kc.Txn.LoadWithPrefix(ctx, granteeIDKey)
+		if err != nil {
+			log.Ctx(ctx).Error("fail to load v2 grantee ids", zap.String("key", granteeIDKey), zap.Error(err))
+			continue
+		}
+
+		for _, idKey := range idKeys {
+			granteeIDInfos := typeutil.AfterN(idKey, granteeIDKey+"/", "/")
+			if len(granteeIDInfos) != 1 {
+				continue
+			}
+			var privilegeName string
+			if granteeIDInfos[0] == util.AnyWord {
+				privilegeName = util.AnyWord
+			} else {
+				privilegeName = util.PrivilegeNameForAPI(granteeIDInfos[0])
+			}
+
+			// Use "ID:<entityID>" as ObjectName to signal ID-based policy generation.
+			grants = append(grants, &milvuspb.GrantEntity{
+				Role:       &milvuspb.RoleEntity{Name: roleName},
+				Object:     &milvuspb.ObjectEntity{Name: objectType},
+				ObjectName: funcutil.EntityIDObjectNamePrefix + entityIDStr,
+				DbName:     "", // Not needed for ID-based matching.
+				Grantor: &milvuspb.GrantorEntity{
+					Privilege: &milvuspb.PrivilegeEntity{Name: privilegeName},
+				},
+			})
+		}
+	}
+
 	return grants, nil
 }
 

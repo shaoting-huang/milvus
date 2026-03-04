@@ -114,7 +114,14 @@ func GetObjectNames(m interface{}, index int32) []string {
 }
 
 func PolicyForPrivilege(roleName string, objectType string, objectName string, privilege string, dbName string) string {
-	return fmt.Sprintf(`{"PType":"p","V0":"%s","V1":"%s","V2":"%s"}`, roleName, PolicyForResource(dbName, objectType, objectName), privilege)
+	var resource string
+	if IsEntityIDObjectName(objectName) {
+		entityID := ParseEntityIDFromObjectName(objectName)
+		resource = PolicyForResourceByID(objectType, entityID)
+	} else {
+		resource = PolicyForResource(dbName, objectType, objectName)
+	}
+	return fmt.Sprintf(`{"PType":"p","V0":"%s","V1":"%s","V2":"%s"}`, roleName, resource, privilege)
 }
 
 func PolicyForPrivileges(grants []*milvuspb.GrantEntity) string {
@@ -129,6 +136,69 @@ func PrivilegesForPolicy(policy string) []string {
 
 func PolicyForResource(dbName string, objectType string, objectName string) string {
 	return fmt.Sprintf("%s-%s", objectType, CombineObjectName(dbName, objectName))
+}
+
+// PolicyForResourceByID builds an ID-based resource string for Casbin enforcement.
+// Format: "ObjectType-ID:entityID", e.g. "Collection-ID:12345"
+func PolicyForResourceByID(objectType string, entityID int64) string {
+	return fmt.Sprintf("%s-ID:%d", objectType, entityID)
+}
+
+// PolicyForPrivilegeV2 builds a JSON policy string using entity ID.
+func PolicyForPrivilegeV2(roleName string, objectType string, entityID int64, privilege string) string {
+	return fmt.Sprintf(`{"PType":"p","V0":"%s","V1":"%s","V2":"%s"}`, roleName, PolicyForResourceByID(objectType, entityID), privilege)
+}
+
+// EntityIDObjectNamePrefix is the prefix for entity-ID-based object names.
+const EntityIDObjectNamePrefix = "ID:"
+
+// IsEntityIDObjectName returns true if the object name is an entity-ID-based name (e.g., "ID:12345").
+func IsEntityIDObjectName(objectName string) bool {
+	return strings.HasPrefix(objectName, EntityIDObjectNamePrefix)
+}
+
+// FormatEntityIDObjectName creates an entity-ID-based object name from an int64 ID.
+func FormatEntityIDObjectName(entityID int64) string {
+	return fmt.Sprintf("%s%d", EntityIDObjectNamePrefix, entityID)
+}
+
+// ParseEntityIDFromObjectName extracts the entity ID from an entity-ID-based object name.
+// Returns -1 if parsing fails.
+func ParseEntityIDFromObjectName(objectName string) int64 {
+	if !IsEntityIDObjectName(objectName) {
+		return -1
+	}
+	idStr := objectName[len(EntityIDObjectNamePrefix):]
+	var id int64
+	if _, err := fmt.Sscanf(idStr, "%d", &id); err != nil {
+		return -1
+	}
+	return id
+}
+
+// IsIDBasedResource returns true if the resource string uses ID-based format (e.g., "Collection-ID:12345").
+// It checks that "-ID:" appears right after the object type prefix.
+func IsIDBasedResource(resource string) bool {
+	idx := strings.Index(resource, "-")
+	if idx < 0 {
+		return false
+	}
+	return strings.HasPrefix(resource[idx:], "-ID:")
+}
+
+// ParseEntityIDFromResource extracts the entity ID from an ID-based resource string.
+// Returns -1 if parsing fails.
+func ParseEntityIDFromResource(resource string) int64 {
+	idx := strings.Index(resource, "-ID:")
+	if idx < 0 {
+		return -1
+	}
+	idStr := resource[idx+4:]
+	var id int64
+	if _, err := fmt.Sscanf(idStr, "%d", &id); err != nil {
+		return -1
+	}
+	return id
 }
 
 func CombineObjectName(dbName string, objectName string) string {

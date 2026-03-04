@@ -52,6 +52,11 @@ const (
 	// GranteeIDPrefix prefix for mapping among privilege and grantor
 	GranteeIDPrefix = ComponentPrefix + CommonCredentialPrefix + "/grantee-id"
 
+	// GranteeV2Prefix prefix for v2 entity-ID-based grant storage
+	// Key format: grantee-privileges-v2/<tenant>/<role>/<objectType>/<entityID>
+	// Value: granteeID|dbName|objectName
+	GranteeV2Prefix = ComponentPrefix + CommonCredentialPrefix + "/grantee-privileges-v2"
+
 	// PrivilegeGroupPrefix prefix for privilege group
 	PrivilegeGroupPrefix = ComponentPrefix + "/privilege-group"
 

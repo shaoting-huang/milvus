@@ -320,6 +320,56 @@ func (_c *RootCoordCatalog_AlterGrant_Call) RunAndReturn(run func(context.Contex
 	return _c
 }
 
+// AlterGrantV2 provides a mock function with given fields: ctx, tenant, entity, operateType, entityID
+func (_m *RootCoordCatalog) AlterGrantV2(ctx context.Context, tenant string, entity *milvuspb.GrantEntity, operateType milvuspb.OperatePrivilegeType, entityID int64) error {
+	ret := _m.Called(ctx, tenant, entity, operateType, entityID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for AlterGrantV2")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, string, *milvuspb.GrantEntity, milvuspb.OperatePrivilegeType, int64) error); ok {
+		r0 = rf(ctx, tenant, entity, operateType, entityID)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// RootCoordCatalog_AlterGrantV2_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'AlterGrantV2'
+type RootCoordCatalog_AlterGrantV2_Call struct {
+	*mock.Call
+}
+
+// AlterGrantV2 is a helper method to define mock.On call
+//   - ctx context.Context
+//   - tenant string
+//   - entity *milvuspb.GrantEntity
+//   - operateType milvuspb.OperatePrivilegeType
+//   - entityID int64
+func (_e *RootCoordCatalog_Expecter) AlterGrantV2(ctx interface{}, tenant interface{}, entity interface{}, operateType interface{}, entityID interface{}) *RootCoordCatalog_AlterGrantV2_Call {
+	return &RootCoordCatalog_AlterGrantV2_Call{Call: _e.mock.On("AlterGrantV2", ctx, tenant, entity, operateType, entityID)}
+}
+
+func (_c *RootCoordCatalog_AlterGrantV2_Call) Run(run func(ctx context.Context, tenant string, entity *milvuspb.GrantEntity, operateType milvuspb.OperatePrivilegeType, entityID int64)) *RootCoordCatalog_AlterGrantV2_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string), args[2].(*milvuspb.GrantEntity), args[3].(milvuspb.OperatePrivilegeType), args[4].(int64))
+	})
+	return _c
+}
+
+func (_c *RootCoordCatalog_AlterGrantV2_Call) Return(_a0 error) *RootCoordCatalog_AlterGrantV2_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *RootCoordCatalog_AlterGrantV2_Call) RunAndReturn(run func(context.Context, string, *milvuspb.GrantEntity, milvuspb.OperatePrivilegeType, int64) error) *RootCoordCatalog_AlterGrantV2_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // AlterPartition provides a mock function with given fields: ctx, dbID, oldPart, newPart, alterType, ts
 func (_m *RootCoordCatalog) AlterPartition(ctx context.Context, dbID int64, oldPart *model.Partition, newPart *model.Partition, alterType metastore.AlterType, ts uint64) error {
 	ret := _m.Called(ctx, dbID, oldPart, newPart, alterType, ts)

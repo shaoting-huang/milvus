@@ -93,6 +93,12 @@ func DBMatchFunc(args ...interface{}) (interface{}, error) {
 	name1 := args[0].(string)
 	name2 := args[1].(string)
 
+	// For ID-based resources, same ID implies same DB.
+	if funcutil.IsIDBasedResource(name1) || funcutil.IsIDBasedResource(name2) {
+		// Both must be ID-based and equal for a match.
+		return name1 == name2, nil
+	}
+
 	db1, _ := funcutil.SplitObjectName(name1[strings.Index(name1, "-")+1:])
 	db2, _ := funcutil.SplitObjectName(name2[strings.Index(name2, "-")+1:])
 
@@ -132,6 +138,11 @@ func PrivilegeGroupContains(args ...interface{}) (interface{}, error) {
 }
 
 func collMatch(requestObj, policyObj string) bool {
+	// For ID-based resources, exact match required.
+	if funcutil.IsIDBasedResource(requestObj) || funcutil.IsIDBasedResource(policyObj) {
+		return requestObj == policyObj
+	}
+
 	_, coll1 := funcutil.SplitObjectName(requestObj[strings.Index(requestObj, "-")+1:])
 	_, coll2 := funcutil.SplitObjectName(policyObj[strings.Index(policyObj, "-")+1:])
 

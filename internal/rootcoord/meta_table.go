@@ -27,6 +27,7 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/exp/maps"
 
+	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/metastore/model"
@@ -1894,10 +1895,40 @@ func (mt *MetaTable) OperatePrivilege(ctx context.Context, tenant string, entity
 		entity.DbName = util.DefaultDBName
 	}
 
+	// Resolve entity ID for ID-based authorization (v2).
+	entityID := mt.resolveGrantEntityID(ctx, entity)
+
 	mt.permissionLock.Lock()
 	defer mt.permissionLock.Unlock()
 
-	return mt.catalog.AlterGrant(ctx, tenant, entity, operateType)
+	return mt.catalog.AlterGrantV2(ctx, tenant, entity, operateType, entityID)
+}
+
+// resolveGrantEntityID resolves the entity ID for a grant entity.
+// Returns the entity ID (> 0) if resolved, or 0 if not applicable.
+func (mt *MetaTable) resolveGrantEntityID(ctx context.Context, entity *milvuspb.GrantEntity) int64 {
+	// Wildcard grants don't bind to a specific entity.
+	if entity.ObjectName == util.AnyWord {
+		return 0
+	}
+
+	objectType := entity.Object.Name
+	switch objectType {
+	case commonpb.ObjectType_Collection.String():
+		// Use GetCollectionID which resolves both collection names and aliases.
+		id := mt.GetCollectionID(ctx, entity.DbName, entity.ObjectName)
+		if id == InvalidCollectionID {
+			log.Ctx(ctx).Info("resolveGrantEntityID: collection not found, skip v2 grant",
+				zap.String("db", entity.DbName), zap.String("collection", entity.ObjectName))
+			return 0
+		}
+		return id
+	case commonpb.ObjectType_Global.String(), commonpb.ObjectType_User.String():
+		// Global and User types don't need entity ID resolution.
+		return 0
+	default:
+		return 0
+	}
 }
 
 // SelectGrant select grant
@@ -2023,7 +2054,34 @@ func (mt *MetaTable) RestoreRBAC(ctx context.Context, tenant string, meta *milvu
 	mt.permissionLock.Lock()
 	defer mt.permissionLock.Unlock()
 
-	return mt.catalog.RestoreRBAC(ctx, tenant, meta)
+	// Restore v1 grants (and all other RBAC entities) as before.
+	if err := mt.catalog.RestoreRBAC(ctx, tenant, meta); err != nil {
+		return err
+	}
+
+	// Best-effort: write v2 (entity-ID-based) entries for grants whose resources
+	// exist on this cluster, so that ID-based enforcement is active immediately.
+	for _, grant := range meta.GetGrants() {
+		entityID := mt.resolveGrantEntityID(ctx, grant)
+		if entityID <= 0 {
+			continue
+		}
+		privName := grant.GetGrantor().GetPrivilege().GetName()
+		if util.IsPrivilegeNameDefined(privName) {
+			grant.Grantor.Privilege.Name = util.PrivilegeNameForMetastore(privName)
+		} else {
+			grant.Grantor.Privilege.Name = util.PrivilegeGroupNameForMetastore(privName)
+		}
+		// AlterGrantV2 with entityID>0 writes v2 keys (v1 already written above, idempotent).
+		if err := mt.catalog.AlterGrantV2(ctx, tenant, grant, milvuspb.OperatePrivilegeType_Grant, entityID); err != nil {
+			log.Ctx(ctx).Warn("RestoreRBAC: failed to write v2 grant entry, v1 fallback remains",
+				zap.String("role", grant.GetRole().GetName()),
+				zap.String("object", grant.GetObjectName()),
+				zap.Int64("entityID", entityID),
+				zap.Error(err))
+		}
+	}
+	return nil
 }
 
 // check if the privilege group name is defined by users

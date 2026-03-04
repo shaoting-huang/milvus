@@ -73,6 +73,9 @@ type RootCoordCatalog interface {
 	// AlterGrant  grants or revokes a grant of a role to an object, according to the operateType.
 	// Please make sure entity and operateType are valid before calling this API
 	AlterGrant(ctx context.Context, tenant string, entity *milvuspb.GrantEntity, operateType milvuspb.OperatePrivilegeType) error
+	// AlterGrantV2 grants or revokes with entity ID for ID-based authorization.
+	// entityID > 0 enables dual-write to v2 key format; entityID <= 0 behaves like AlterGrant.
+	AlterGrantV2(ctx context.Context, tenant string, entity *milvuspb.GrantEntity, operateType milvuspb.OperatePrivilegeType, entityID int64) error
 	// DeleteGrant deletes all the grant for a role.
 	// Please make sure the role.Name isn't empty before call this API.
 	DeleteGrant(ctx context.Context, tenant string, role *milvuspb.RoleEntity) error

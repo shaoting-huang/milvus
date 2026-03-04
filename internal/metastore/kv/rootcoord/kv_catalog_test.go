@@ -2470,6 +2470,7 @@ func TestRBAC_Grant(t *testing.T) {
 
 			errorRole           = "error-role"
 			errorRolePrefix     = funcutil.HandleTenantForEtcdKey(GranteePrefix, tenant, errorRole+"/")
+			errorRoleV2Prefix   = funcutil.HandleTenantForEtcdKey(GranteeV2Prefix, tenant, errorRole+"/")
 			loadErrorRole       = "load-error-role"
 			loadErrorRolePrefix = funcutil.HandleTenantForEtcdKey(GranteePrefix, tenant, loadErrorRole+"/")
 			granteeID           = "123456"
@@ -2478,7 +2479,8 @@ func TestRBAC_Grant(t *testing.T) {
 
 		kvmock.EXPECT().LoadWithPrefix(mock.Anything, loadErrorRolePrefix).Call.Return(nil, nil, errors.New("mock loadWithPrefix error"))
 		kvmock.EXPECT().LoadWithPrefix(mock.Anything, mock.Anything).Call.Return(nil, []string{granteeID}, nil)
-		kvmock.EXPECT().MultiSaveAndRemoveWithPrefix(mock.Anything, mock.Anything, []string{errorRolePrefix, granteePrefix}, mock.Anything).Call.Return(errors.New("mock removeWithPrefix error"))
+		// errorRole: v1 keys + v2 keys (v2 value "123456" fails to decode, so no v2 grantee cleanup, but v2 prefix is removed)
+		kvmock.EXPECT().MultiSaveAndRemoveWithPrefix(mock.Anything, mock.Anything, []string{errorRolePrefix, granteePrefix, errorRoleV2Prefix}, mock.Anything).Call.Return(errors.New("mock removeWithPrefix error"))
 		kvmock.EXPECT().MultiSaveAndRemoveWithPrefix(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Call.Return(nil)
 
 		tests := []struct {
@@ -3472,5 +3474,131 @@ func TestCatalog_FileResource(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, uint64(456), version)
 		assert.Equal(t, 2, len(resources))
+	})
+}
+
+func TestV2GrantValueEncoding(t *testing.T) {
+	t.Run("encode and decode", func(t *testing.T) {
+		encoded := encodeV2GrantValue("grantee123", "default", "myCollection")
+		granteeID, dbName, objectName, ok := decodeV2GrantValue(encoded)
+		assert.True(t, ok)
+		assert.Equal(t, "grantee123", granteeID)
+		assert.Equal(t, "default", dbName)
+		assert.Equal(t, "myCollection", objectName)
+	})
+
+	t.Run("decode invalid", func(t *testing.T) {
+		_, _, _, ok := decodeV2GrantValue("invalid")
+		assert.False(t, ok)
+
+		_, _, _, ok = decodeV2GrantValue("a|b")
+		assert.False(t, ok)
+	})
+}
+
+func TestRBAC_AlterGrantV2(t *testing.T) {
+	var (
+		tenant  = "default"
+		ctx     = context.TODO()
+		role    = "testRole"
+		object  = "Collection"
+		objName = "myCol"
+		dbName  = "default"
+		priv    = "Search"
+		user    = "admin"
+	)
+
+	makeEntity := func() *milvuspb.GrantEntity {
+		return &milvuspb.GrantEntity{
+			Role:       &milvuspb.RoleEntity{Name: role},
+			Object:     &milvuspb.ObjectEntity{Name: object},
+			ObjectName: objName,
+			DbName:     dbName,
+			Grantor: &milvuspb.GrantorEntity{
+				User:      &milvuspb.UserEntity{Name: user},
+				Privilege: &milvuspb.PrivilegeEntity{Name: priv},
+			},
+		}
+	}
+
+	t.Run("grant with entity ID creates v1 and v2 keys", func(t *testing.T) {
+		kvmock := mocks.NewTxnKV(t)
+		c := NewCatalog(kvmock, nil)
+
+		// v1 AlterGrant: key not found → create
+		v1Key := funcutil.HandleTenantForEtcdKey(GranteePrefix, tenant, fmt.Sprintf("%s/%s/%s", role, object, funcutil.CombineObjectName(dbName, objName)))
+		v1KeyLegacy := funcutil.HandleTenantForEtcdKey(GranteePrefix, tenant, fmt.Sprintf("%s/%s/%s", role, object, objName))
+		v1GranteeID := crypto.MD5(v1Key)
+
+		kvmock.EXPECT().Load(mock.Anything, v1KeyLegacy).Return("", merr.WrapErrIoKeyNotFound(v1KeyLegacy))
+		kvmock.EXPECT().Load(mock.Anything, v1Key).Return("", merr.WrapErrIoKeyNotFound(v1Key))
+		kvmock.EXPECT().Save(mock.Anything, v1Key, v1GranteeID).Return(nil)
+
+		v1PrivKey := funcutil.HandleTenantForEtcdKey(GranteeIDPrefix, tenant, fmt.Sprintf("%s/%s", v1GranteeID, priv))
+		kvmock.EXPECT().Load(mock.Anything, v1PrivKey).Return("", merr.WrapErrIoKeyNotFound(v1PrivKey))
+		kvmock.EXPECT().Save(mock.Anything, v1PrivKey, user).Return(nil)
+
+		// v2 AlterGrantV2: key not found → create
+		entityID := int64(12345)
+		v2Key := funcutil.HandleTenantForEtcdKey(GranteeV2Prefix, tenant, fmt.Sprintf("%s/%s/%d", role, object, entityID))
+		v2GranteeID := "v2-" + crypto.MD5(v2Key)
+		v2Val := encodeV2GrantValue(v2GranteeID, dbName, objName)
+
+		kvmock.EXPECT().Load(mock.Anything, v2Key).Return("", merr.WrapErrIoKeyNotFound(v2Key))
+		kvmock.EXPECT().Save(mock.Anything, v2Key, v2Val).Return(nil)
+
+		v2PrivKey := funcutil.HandleTenantForEtcdKey(GranteeIDPrefix, tenant, fmt.Sprintf("%s/%s", v2GranteeID, priv))
+		kvmock.EXPECT().Load(mock.Anything, v2PrivKey).Return("", merr.WrapErrIoKeyNotFound(v2PrivKey))
+		kvmock.EXPECT().Save(mock.Anything, v2PrivKey, user).Return(nil)
+
+		err := c.AlterGrantV2(ctx, tenant, makeEntity(), milvuspb.OperatePrivilegeType_Grant, entityID)
+		assert.NoError(t, err)
+	})
+
+	t.Run("grant with entityID=0 only creates v1 key", func(t *testing.T) {
+		kvmock := mocks.NewTxnKV(t)
+		c := NewCatalog(kvmock, nil)
+
+		// v1 AlterGrant
+		v1Key := funcutil.HandleTenantForEtcdKey(GranteePrefix, tenant, fmt.Sprintf("%s/%s/%s", role, object, funcutil.CombineObjectName(dbName, objName)))
+		v1KeyLegacy := funcutil.HandleTenantForEtcdKey(GranteePrefix, tenant, fmt.Sprintf("%s/%s/%s", role, object, objName))
+		v1GranteeID := crypto.MD5(v1Key)
+
+		kvmock.EXPECT().Load(mock.Anything, v1KeyLegacy).Return("", merr.WrapErrIoKeyNotFound(v1KeyLegacy))
+		kvmock.EXPECT().Load(mock.Anything, v1Key).Return("", merr.WrapErrIoKeyNotFound(v1Key))
+		kvmock.EXPECT().Save(mock.Anything, v1Key, v1GranteeID).Return(nil)
+
+		v1PrivKey := funcutil.HandleTenantForEtcdKey(GranteeIDPrefix, tenant, fmt.Sprintf("%s/%s", v1GranteeID, priv))
+		kvmock.EXPECT().Load(mock.Anything, v1PrivKey).Return("", merr.WrapErrIoKeyNotFound(v1PrivKey))
+		kvmock.EXPECT().Save(mock.Anything, v1PrivKey, user).Return(nil)
+
+		// No v2 calls expected since entityID=0
+		err := c.AlterGrantV2(ctx, tenant, makeEntity(), milvuspb.OperatePrivilegeType_Grant, 0)
+		assert.NoError(t, err)
+	})
+
+	t.Run("grant with wildcard objectName skips v2", func(t *testing.T) {
+		kvmock := mocks.NewTxnKV(t)
+		c := NewCatalog(kvmock, nil)
+
+		entity := makeEntity()
+		entity.ObjectName = "*"
+
+		// v1 AlterGrant
+		v1Key := funcutil.HandleTenantForEtcdKey(GranteePrefix, tenant, fmt.Sprintf("%s/%s/%s", role, object, funcutil.CombineObjectName(dbName, "*")))
+		v1KeyLegacy := funcutil.HandleTenantForEtcdKey(GranteePrefix, tenant, fmt.Sprintf("%s/%s/%s", role, object, "*"))
+		v1GranteeID := crypto.MD5(v1Key)
+
+		kvmock.EXPECT().Load(mock.Anything, v1KeyLegacy).Return("", merr.WrapErrIoKeyNotFound(v1KeyLegacy))
+		kvmock.EXPECT().Load(mock.Anything, v1Key).Return("", merr.WrapErrIoKeyNotFound(v1Key))
+		kvmock.EXPECT().Save(mock.Anything, v1Key, v1GranteeID).Return(nil)
+
+		v1PrivKey := funcutil.HandleTenantForEtcdKey(GranteeIDPrefix, tenant, fmt.Sprintf("%s/%s", v1GranteeID, priv))
+		kvmock.EXPECT().Load(mock.Anything, v1PrivKey).Return("", merr.WrapErrIoKeyNotFound(v1PrivKey))
+		kvmock.EXPECT().Save(mock.Anything, v1PrivKey, user).Return(nil)
+
+		// No v2 calls expected since objectName is wildcard
+		err := c.AlterGrantV2(ctx, tenant, entity, milvuspb.OperatePrivilegeType_Grant, 12345)
+		assert.NoError(t, err)
 	})
 }

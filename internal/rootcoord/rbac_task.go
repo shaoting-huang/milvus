@@ -26,6 +26,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/pkg/v2/common"
 	"github.com/milvus-io/milvus/pkg/v2/log"
@@ -81,6 +82,10 @@ func executeOperatePrivilegeTaskSteps(ctx context.Context, core *Core, entity *m
 		if err != nil {
 			return err
 		}
+
+		// Also generate v2 (ID-based) grants for entities that have entity IDs.
+		v2ExpandGrants := buildV2ExpandGrants(ctx, core, entity, expandGrants)
+
 		// if there is same grant in the other privilege groups, the grant should not be removed from the cache
 		if operateType == milvuspb.OperatePrivilegeType_Revoke {
 			metaGrants, err := core.meta.SelectGrant(ctx, util.DefaultTenant, &milvuspb.GrantEntity{
@@ -99,11 +104,23 @@ func executeOperatePrivilegeTaskSteps(ctx context.Context, core *Core, entity *m
 					return proto.Equal(g1, g2)
 				})
 			})
+			// For v2 grants, also filter out those still active.
+			if len(v2ExpandGrants) > 0 {
+				metaV2ExpandGrants := buildV2ExpandGrants(ctx, core, entity, metaExpandGrants)
+				v2ExpandGrants = lo.Filter(v2ExpandGrants, func(g1 *milvuspb.GrantEntity, _ int) bool {
+					return !lo.ContainsBy(metaV2ExpandGrants, func(g2 *milvuspb.GrantEntity) bool {
+						return proto.Equal(g1, g2)
+					})
+				})
+			}
 		}
-		if len(expandGrants) > 0 {
+
+		// Send v1 + v2 policy strings to proxy cache.
+		allGrants := append(expandGrants, v2ExpandGrants...)
+		if len(allGrants) > 0 {
 			if err := core.proxyClientManager.RefreshPolicyInfoCache(ctx, &proxypb.RefreshPolicyInfoCacheRequest{
 				OpType: opType,
-				OpKey:  funcutil.PolicyForPrivileges(expandGrants),
+				OpKey:  funcutil.PolicyForPrivileges(allGrants),
 			}); err != nil {
 				log.Ctx(ctx).Warn("fail to refresh policy info cache", zap.Any("in", entity), zap.Error(err))
 				return err
@@ -114,6 +131,51 @@ func executeOperatePrivilegeTaskSteps(ctx context.Context, core *Core, entity *m
 		return errors.Wrap(err, "failed to refresh policy info cache")
 	}
 	return nil
+}
+
+// buildV2ExpandGrants creates v2 (ID-based) grant entities from expanded grants.
+// These use "ID:<entityID>" as ObjectName so PolicyForPrivilege generates ID-based policies.
+func buildV2ExpandGrants(ctx context.Context, core *Core, originalEntity *milvuspb.GrantEntity, expandGrants []*milvuspb.GrantEntity) []*milvuspb.GrantEntity {
+	if originalEntity.ObjectName == util.AnyWord {
+		return nil
+	}
+
+	entityID := resolveEntityIDFromCore(ctx, core, originalEntity)
+	if entityID <= 0 {
+		return nil
+	}
+
+	idObjectName := funcutil.FormatEntityIDObjectName(entityID)
+	var v2Grants []*milvuspb.GrantEntity
+	for _, g := range expandGrants {
+		// Only create v2 grants for collection-level privileges (not global).
+		if g.Object.Name == commonpb.ObjectType_Global.String() {
+			continue
+		}
+		v2Grants = append(v2Grants, &milvuspb.GrantEntity{
+			Role:       g.Role,
+			Object:     g.Object,
+			ObjectName: idObjectName,
+			DbName:     "", // Not used for ID-based policies.
+			Grantor:    g.Grantor,
+		})
+	}
+	return v2Grants
+}
+
+// resolveEntityIDFromCore resolves an entity ID from the rootcoord core.
+func resolveEntityIDFromCore(ctx context.Context, core *Core, entity *milvuspb.GrantEntity) int64 {
+	objectType := entity.Object.Name
+	switch objectType {
+	case commonpb.ObjectType_Collection.String():
+		collID := core.meta.GetCollectionID(ctx, entity.DbName, entity.ObjectName)
+		if collID <= 0 {
+			return 0
+		}
+		return collID
+	default:
+		return 0
+	}
 }
 
 func executeOperatePrivilegeGroupTaskSteps(ctx context.Context, core *Core, in *milvuspb.PrivilegeGroupInfo, operateType milvuspb.OperatePrivilegeGroupType) error {

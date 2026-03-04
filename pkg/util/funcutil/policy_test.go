@@ -79,3 +79,56 @@ func Test_PolicyCheckerWithRole(t *testing.T) {
 	assert.True(t, PolicyCheckerWithRole(a, "admin"))
 	assert.False(t, PolicyCheckerWithRole(b, "admin"))
 }
+
+func Test_PolicyForResourceByID(t *testing.T) {
+	assert.Equal(t, "Collection-ID:12345", PolicyForResourceByID("Collection", 12345))
+	assert.Equal(t, "Database-ID:99", PolicyForResourceByID("Database", 99))
+}
+
+func Test_IsIDBasedResource(t *testing.T) {
+	assert.True(t, IsIDBasedResource("Collection-ID:12345"))
+	assert.True(t, IsIDBasedResource("Database-ID:99"))
+	assert.False(t, IsIDBasedResource("Collection-default.col1"))
+	assert.False(t, IsIDBasedResource("Global-*"))
+}
+
+func Test_ParseEntityIDFromResource(t *testing.T) {
+	assert.Equal(t, int64(12345), ParseEntityIDFromResource("Collection-ID:12345"))
+	assert.Equal(t, int64(-1), ParseEntityIDFromResource("Collection-default.col1"))
+	assert.Equal(t, int64(-1), ParseEntityIDFromResource("invalid"))
+}
+
+func Test_EntityIDObjectName(t *testing.T) {
+	// Format
+	assert.Equal(t, "ID:12345", FormatEntityIDObjectName(12345))
+
+	// IsEntityIDObjectName
+	assert.True(t, IsEntityIDObjectName("ID:12345"))
+	assert.False(t, IsEntityIDObjectName("col1"))
+	assert.False(t, IsEntityIDObjectName(""))
+
+	// Parse
+	assert.Equal(t, int64(12345), ParseEntityIDFromObjectName("ID:12345"))
+	assert.Equal(t, int64(-1), ParseEntityIDFromObjectName("col1"))
+	assert.Equal(t, int64(-1), ParseEntityIDFromObjectName("ID:abc"))
+}
+
+func Test_PolicyForPrivilegeV2(t *testing.T) {
+	assert.Equal(t,
+		`{"PType":"p","V0":"admin","V1":"Collection-ID:12345","V2":"Search"}`,
+		PolicyForPrivilegeV2("admin", "Collection", 12345, "Search"))
+}
+
+func Test_PolicyForPrivilege_IDBasedObjectName(t *testing.T) {
+	// When ObjectName is "ID:12345", PolicyForPrivilege should use ID-based resource format.
+	result := PolicyForPrivilege("admin", "Collection", "ID:12345", "Search", "default")
+	assert.Equal(t,
+		`{"PType":"p","V0":"admin","V1":"Collection-ID:12345","V2":"Search"}`,
+		result)
+
+	// Normal name-based ObjectName should still work.
+	result = PolicyForPrivilege("admin", "Collection", "col1", "Search", "default")
+	assert.Equal(t,
+		`{"PType":"p","V0":"admin","V1":"Collection-default.col1","V2":"Search"}`,
+		result)
+}
