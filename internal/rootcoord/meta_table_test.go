@@ -2585,6 +2585,20 @@ func TestMetaTable_RestoreRBAC(t *testing.T) {
 	catalog.EXPECT().RestoreRBAC(mock.Anything, mock.Anything, mock.Anything).Return(errors.New("error mock RestoreRBAC"))
 	err = mt.RestoreRBAC(context.TODO(), util.DefaultTenant, &milvuspb.RBACMeta{})
 	assert.Error(t, err)
+
+	invalidCatalog := mocks.NewRootCoordCatalog(t)
+	invalidCatalog.EXPECT().RestoreRBAC(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	invalidMT := &MetaTable{
+		dbName2Meta: map[string]*model.Database{},
+		names:       newNameDb(),
+		aliases:     newNameDb(),
+		catalog:     invalidCatalog,
+	}
+	err = invalidMT.RestoreRBAC(context.TODO(), util.DefaultTenant, &milvuspb.RBACMeta{
+		Roles: []*milvuspb.RoleEntity{{Name: ""}},
+	})
+	assert.Error(t, err)
+	invalidCatalog.AssertNotCalled(t, "RestoreRBAC", mock.Anything, mock.Anything, mock.Anything)
 }
 
 func TestMetaTable_CheckIfRBACRestorable_Wildcard(t *testing.T) {
@@ -2623,6 +2637,70 @@ func TestMetaTable_CheckIfRBACRestorable_Wildcard(t *testing.T) {
 		},
 	}
 	assert.NoError(t, mt.CheckIfRBACRestorable(context.TODO(), req))
+}
+
+func TestMetaTable_CheckIfRBACRestorableRejectsEmptyRBACNames(t *testing.T) {
+	tests := []struct {
+		name string
+		meta *milvuspb.RBACMeta
+	}{
+		{
+			name: "empty role",
+			meta: &milvuspb.RBACMeta{
+				Roles: []*milvuspb.RoleEntity{{Name: ""}},
+			},
+		},
+		{
+			name: "empty grant role",
+			meta: &milvuspb.RBACMeta{
+				Roles: []*milvuspb.RoleEntity{{Name: "role1"}},
+				Grants: []*milvuspb.GrantEntity{
+					{
+						Role:   &milvuspb.RoleEntity{Name: ""},
+						Object: &milvuspb.ObjectEntity{Name: commonpb.ObjectType_Global.String()},
+						Grantor: &milvuspb.GrantorEntity{
+							Privilege: &milvuspb.PrivilegeEntity{Name: util.PrivilegeNameForAPI("CreateCollection")},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "empty user",
+			meta: &milvuspb.RBACMeta{
+				Users: []*milvuspb.UserInfo{{User: ""}},
+			},
+		},
+		{
+			name: "empty user role",
+			meta: &milvuspb.RBACMeta{
+				Roles: []*milvuspb.RoleEntity{{Name: "role1"}},
+				Users: []*milvuspb.UserInfo{{User: "user1", Roles: []*milvuspb.RoleEntity{{Name: ""}}}},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			catalog := mocks.NewRootCoordCatalog(t)
+			catalog.EXPECT().ListRole(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+				Return(nil, nil).Maybe()
+			catalog.EXPECT().ListPrivilegeGroups(mock.Anything).
+				Return(nil, nil).Maybe()
+			catalog.EXPECT().ListUser(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+				Return(nil, nil).Maybe()
+
+			mt := &MetaTable{
+				dbName2Meta: map[string]*model.Database{},
+				names:       newNameDb(),
+				aliases:     newNameDb(),
+				catalog:     catalog,
+			}
+
+			err := mt.CheckIfRBACRestorable(context.TODO(), &milvuspb.RestoreRBACMetaRequest{RBACMeta: test.meta})
+			require.Error(t, err)
+		})
+	}
 }
 
 func TestMetaTable_PrivilegeGroup(t *testing.T) {

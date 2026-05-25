@@ -2061,6 +2061,9 @@ func (mt *MetaTable) CheckIfRBACRestorable(ctx context.Context, req *milvuspb.Re
 	if len(meta.GetRoles()) == 0 && len(meta.GetPrivilegeGroups()) == 0 && len(meta.GetGrants()) == 0 && len(meta.GetUsers()) == 0 {
 		return errEmptyRBACMeta
 	}
+	if err := validateRBACMetaNames(meta); err != nil {
+		return err
+	}
 
 	mt.permissionLock.RLock()
 	defer mt.permissionLock.RUnlock()
@@ -2126,10 +2129,38 @@ func (mt *MetaTable) CheckIfRBACRestorable(ctx context.Context, req *milvuspb.Re
 }
 
 func (mt *MetaTable) RestoreRBAC(ctx context.Context, tenant string, meta *milvuspb.RBACMeta) error {
+	if err := validateRBACMetaNames(meta); err != nil {
+		return err
+	}
+
 	mt.permissionLock.Lock()
 	defer mt.permissionLock.Unlock()
 
 	return mt.catalog.RestoreRBAC(ctx, tenant, meta)
+}
+
+func validateRBACMetaNames(meta *milvuspb.RBACMeta) error {
+	for _, role := range meta.GetRoles() {
+		if funcutil.IsEmptyString(role.GetName()) {
+			return merr.WrapErrParameterInvalidMsg("role name in the role entity is empty")
+		}
+	}
+	for _, grant := range meta.GetGrants() {
+		if funcutil.IsEmptyString(grant.GetRole().GetName()) {
+			return merr.WrapErrParameterInvalidMsg("role name in the grant entity is empty")
+		}
+	}
+	for _, user := range meta.GetUsers() {
+		if funcutil.IsEmptyString(user.GetUser()) {
+			return merr.WrapErrParameterInvalidMsg("username in the user entity is empty")
+		}
+		for _, role := range user.GetRoles() {
+			if funcutil.IsEmptyString(role.GetName()) {
+				return merr.WrapErrParameterInvalidMsg("role name in the role entity is empty")
+			}
+		}
+	}
+	return nil
 }
 
 // check if the privilege group name is defined by users

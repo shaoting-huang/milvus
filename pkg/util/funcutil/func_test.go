@@ -629,6 +629,11 @@ func TestUserRoleCache(t *testing.T) {
 
 	_, _, err = DecodeUserRoleCache("foo")
 	assert.Error(t, err)
+
+	_, _, err = DecodeUserRoleCache("foo/")
+	assert.Error(t, err)
+	_, _, err = DecodeUserRoleCache("/root")
+	assert.Error(t, err)
 }
 
 func TestMapToJSON(t *testing.T) {

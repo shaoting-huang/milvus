@@ -745,6 +745,9 @@ func DecodeUserRoleCache(cache string) (string, string, error) {
 	}
 	user := cache[:index]
 	role := cache[index+1:]
+	if IsEmptyString(user) || IsEmptyString(role) {
+		return "", "", fmt.Errorf("invalid param, cache: [%s]", cache)
+	}
 	return user, role, nil
 }
 

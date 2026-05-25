@@ -2941,6 +2941,44 @@ func TestRBAC_Restore(t *testing.T) {
 	assert.Len(t, privGroups, 2)
 }
 
+func TestRBACRestoreRejectsMalformedNamesBeforeWrites(t *testing.T) {
+	ctx := context.Background()
+	tenant := util.DefaultTenant
+
+	tests := []struct {
+		name string
+		meta *milvuspb.RBACMeta
+	}{
+		{
+			name: "empty role",
+			meta: &milvuspb.RBACMeta{
+				Roles: []*milvuspb.RoleEntity{{Name: ""}},
+			},
+		},
+		{
+			name: "empty user role",
+			meta: &milvuspb.RBACMeta{
+				Roles: []*milvuspb.RoleEntity{{Name: "role1"}},
+				Users: []*milvuspb.UserInfo{
+					{User: "user1", Password: "passwd", Roles: []*milvuspb.RoleEntity{{Name: ""}}},
+				},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			kvmock := mocks.NewTxnKV(t)
+			c := NewCatalog(kvmock)
+			kvmock.EXPECT().Save(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+			err := c.RestoreRBAC(ctx, tenant, test.meta)
+			require.Error(t, err)
+			kvmock.AssertNotCalled(t, "Save", mock.Anything, mock.Anything, mock.Anything)
+		})
+	}
+}
+
 func TestRBAC_Restore_Wildcard(t *testing.T) {
 	etcdCli, _ := etcd.GetEtcdClient(
 		Params.EtcdCfg.UseEmbedEtcd.GetAsBool(),
@@ -3313,6 +3351,126 @@ func TestRBACPrefixMatch(t *testing.T) {
 		assert.Contains(t, privileges, util.PrivilegeNameForAPI("Insert"))
 		assert.Contains(t, privileges, util.PrivilegeNameForAPI("Delete"))
 	})
+}
+
+func TestRoleMappingSkipsEmptyRoleNames(t *testing.T) {
+	ctx := context.Background()
+	tenant := util.DefaultTenant
+	username := "ai_voice"
+
+	kvmock := mocks.NewTxnKV(t)
+	c := NewCatalog(kvmock).(*Catalog)
+
+	userPrefix := funcutil.HandleTenantForEtcdPrefix(RoleMappingPrefix, tenant, username)
+	kvmock.EXPECT().LoadWithPrefix(mock.Anything, userPrefix).Return(
+		[]string{
+			userPrefix + "default_db_rw",
+			userPrefix,
+			userPrefix + "kb_db_rw",
+		},
+		nil,
+		nil,
+	)
+
+	roles, err := c.getRolesByUsername(ctx, tenant, username)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"default_db_rw", "kb_db_rw"}, roles)
+	require.NotContains(t, roles, "")
+}
+
+func TestRoleMappingRejectsEmptyRoleNameOnWrite(t *testing.T) {
+	ctx := context.Background()
+	tenant := util.DefaultTenant
+
+	kvmock := mocks.NewTxnKV(t)
+	c := NewCatalog(kvmock)
+
+	err := c.AlterUserRole(ctx, tenant,
+		&milvuspb.UserEntity{Name: "ai_voice"},
+		&milvuspb.RoleEntity{Name: ""},
+		milvuspb.OperateUserRoleType_AddUserToRole)
+	require.Error(t, err)
+	kvmock.AssertNotCalled(t, "Save", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestRoleMappingListUserRoleSkipsMalformedMappings(t *testing.T) {
+	ctx := context.Background()
+	tenant := util.DefaultTenant
+
+	kvmock := mocks.NewTxnKV(t)
+	c := NewCatalog(kvmock)
+
+	prefix := funcutil.HandleTenantForEtcdPrefix(RoleMappingPrefix, tenant)
+	kvmock.EXPECT().LoadWithPrefix(mock.Anything, prefix).Return(
+		[]string{
+			prefix + "user1/role1",
+			prefix + "user1/",
+			prefix + "/role2",
+		},
+		nil,
+		nil,
+	)
+
+	userRoles, err := c.ListUserRole(ctx, tenant)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"user1/role1"}, userRoles)
+	require.NotContains(t, userRoles, "user1/")
+	require.NotContains(t, userRoles, "/role2")
+}
+
+func TestRoleMappingDropCredentialRemovesMalformedUserRoleKeys(t *testing.T) {
+	ctx := context.Background()
+	username := "ai_voice"
+	credentialKey := fmt.Sprintf("%s/%s", CredentialPrefix, username)
+	userPrefix := funcutil.HandleTenantForEtcdPrefix(RoleMappingPrefix, util.DefaultTenant, username)
+
+	kvmock := mocks.NewTxnKV(t)
+	c := NewCatalog(kvmock)
+
+	kvmock.EXPECT().Load(mock.Anything, credentialKey).Return(getUserInfoMetaString(username), nil)
+	kvmock.EXPECT().LoadWithPrefix(mock.Anything, userPrefix).Return(
+		[]string{
+			userPrefix + "default_db_rw",
+			userPrefix,
+		},
+		[]string{"", ""},
+		nil,
+	)
+	kvmock.EXPECT().MultiRemove(mock.Anything, []string{
+		credentialKey,
+		userPrefix + "default_db_rw",
+		userPrefix,
+	}).Return(nil)
+
+	require.NoError(t, c.DropCredential(ctx, username))
+}
+
+func TestRoleMappingListRoleSkipsMalformedUserMappings(t *testing.T) {
+	ctx := context.Background()
+	tenant := util.DefaultTenant
+	roleName := "role1"
+
+	kvmock := mocks.NewTxnKV(t)
+	c := NewCatalog(kvmock)
+
+	prefix := funcutil.HandleTenantForEtcdPrefix(RoleMappingPrefix, tenant)
+	kvmock.EXPECT().LoadWithPrefix(mock.Anything, prefix).Return(
+		[]string{
+			prefix + "user1/" + roleName,
+			prefix + "/" + roleName,
+			prefix + "user2/",
+		},
+		nil,
+		nil,
+	)
+	kvmock.EXPECT().Load(mock.Anything, RolePrefix+"/"+roleName).Return("", nil)
+
+	roles, err := c.ListRole(ctx, tenant, &milvuspb.RoleEntity{Name: roleName}, true)
+	require.NoError(t, err)
+	require.Len(t, roles, 1)
+	require.Equal(t, roleName, roles[0].GetRole().GetName())
+	require.Len(t, roles[0].GetUsers(), 1)
+	require.Equal(t, "user1", roles[0].GetUsers()[0].GetName())
 }
 
 func TestCatalog_FileResource(t *testing.T) {

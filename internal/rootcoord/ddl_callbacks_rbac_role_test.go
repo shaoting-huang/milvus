@@ -25,6 +25,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/util"
 	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
@@ -137,4 +138,22 @@ func TestDDLCallbacksRBACRole(t *testing.T) {
 	})
 	require.NoError(t, merr.CheckRPCCall(status, err))
 	assert.Equal(t, 0, len(selectRoleResp.Results))
+}
+
+func TestDDLCallbacksRBACRoleRejectsMalformedAck(t *testing.T) {
+	core := initStreamingSystemAndCore(t)
+	callback := &DDLCallback{Core: core}
+
+	msg := message.NewAlterRoleMessageBuilderV2().
+		WithHeader(&message.AlterRoleMessageHeader{
+			RoleEntity: &milvuspb.RoleEntity{Name: ""},
+		}).
+		WithBody(&message.AlterRoleMessageBody{}).
+		WithBroadcast([]string{funcutil.GetControlChannel("by-dev-rootcoord-dml_0")}).
+		MustBuildBroadcast()
+
+	err := callback.alterRoleV2AckCallback(context.Background(), message.BroadcastResultAlterRoleMessageV2{
+		Message: message.MustAsBroadcastAlterRoleMessageV2(msg),
+	})
+	require.Error(t, err)
 }
