@@ -894,21 +894,22 @@ func (kc *Catalog) DropPartition(ctx context.Context, dbID int64, collectionID t
 
 func (kc *Catalog) DropCredential(ctx context.Context, username string) error {
 	k := fmt.Sprintf("%s/%s", CredentialPrefix, username)
-	userResults, err := kc.ListUser(ctx, util.DefaultTenant, &milvuspb.UserEntity{Name: username}, true)
+	_, err := kc.GetCredential(ctx, username)
 	if err != nil && !errors.Is(err, merr.ErrIoKeyNotFound) {
-		log.Ctx(ctx).Warn("fail to list user", zap.String("key", k), zap.Error(err))
+		log.Ctx(ctx).Warn("fail to get credential", zap.String("key", k), zap.Error(err))
 		return err
 	}
-	deleteKeys := make([]string, 0, len(userResults)+1)
-	deleteKeys = append(deleteKeys, k)
-	for _, userResult := range userResults {
-		if userResult.User.Name == username {
-			for _, role := range userResult.Roles {
-				userRoleKey := fmt.Sprintf("%s/%s/%s", RoleMappingPrefix, username, role.Name)
-				deleteKeys = append(deleteKeys, userRoleKey)
-			}
-		}
+
+	userRoleKeyPrefix := funcutil.HandleTenantForEtcdPrefix(RoleMappingPrefix, util.DefaultTenant, username)
+	userRoleKeys, _, err := kc.Txn.LoadWithPrefix(ctx, userRoleKeyPrefix)
+	if err != nil {
+		log.Ctx(ctx).Warn("fail to load user-role mappings", zap.String("key", userRoleKeyPrefix), zap.Error(err))
+		return err
 	}
+
+	deleteKeys := make([]string, 0, len(userRoleKeys)+1)
+	deleteKeys = append(deleteKeys, k)
+	deleteKeys = append(deleteKeys, userRoleKeys...)
 	err = kc.Txn.MultiRemove(ctx, deleteKeys)
 	if err != nil {
 		log.Ctx(ctx).Warn("fail to drop credential", zap.String("key", k), zap.Error(err))
@@ -1178,7 +1179,14 @@ func (kc *Catalog) DropRole(ctx context.Context, tenant string, roleName string)
 }
 
 func (kc *Catalog) AlterUserRole(ctx context.Context, tenant string, userEntity *milvuspb.UserEntity, roleEntity *milvuspb.RoleEntity, operateType milvuspb.OperateUserRoleType) error {
-	k := fmt.Sprintf("%s/%s/%s", RoleMappingPrefix, userEntity.Name, roleEntity.Name)
+	if funcutil.IsEmptyString(userEntity.GetName()) {
+		return merr.WrapErrParameterInvalidMsg("username in the user entity is empty")
+	}
+	if funcutil.IsEmptyString(roleEntity.GetName()) {
+		return merr.WrapErrParameterInvalidMsg("role name in the role entity is empty")
+	}
+
+	k := fmt.Sprintf("%s/%s/%s", RoleMappingPrefix, userEntity.GetName(), roleEntity.GetName())
 	switch operateType {
 	case milvuspb.OperateUserRoleType_AddUserToRole:
 		return kc.Txn.Save(ctx, k, "")
@@ -1264,7 +1272,7 @@ func (kc *Catalog) getRolesByUsername(ctx context.Context, tenant string, userna
 	}
 	for _, key := range keys {
 		roleMappingInfos := typeutil.AfterN(key, k, "/")
-		if len(roleMappingInfos) != 1 {
+		if len(roleMappingInfos) != 1 || funcutil.IsEmptyString(roleMappingInfos[0]) {
 			log.Ctx(ctx).Warn("invalid role mapping key", zap.String("string", key), zap.String("sub_string", k))
 			continue
 		}
@@ -1722,7 +1730,7 @@ func (kc *Catalog) ListUserRole(ctx context.Context, tenant string) ([]string, e
 
 	for _, key := range keys {
 		userRolesInfos := typeutil.AfterN(key, k, "/")
-		if len(userRolesInfos) != 2 {
+		if len(userRolesInfos) != 2 || funcutil.IsEmptyString(userRolesInfos[0]) || funcutil.IsEmptyString(userRolesInfos[1]) {
 			log.Ctx(ctx).Warn("invalid user-role key", zap.String("string", key), zap.String("sub_string", k))
 			continue
 		}

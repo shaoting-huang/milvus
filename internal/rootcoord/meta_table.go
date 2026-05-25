@@ -2073,6 +2073,9 @@ func (mt *MetaTable) CheckIfRBACRestorable(ctx context.Context, req *milvuspb.Re
 	existRoleMap := lo.SliceToMap(existRoles, func(entity *milvuspb.RoleResult) (string, struct{}) { return entity.GetRole().GetName(), struct{}{} })
 	existRoleAfterRestoreMap := lo.SliceToMap(existRoles, func(entity *milvuspb.RoleResult) (string, struct{}) { return entity.GetRole().GetName(), struct{}{} })
 	for _, role := range meta.GetRoles() {
+		if funcutil.IsEmptyString(role.GetName()) {
+			return merr.WrapErrParameterInvalidMsg("role name in the role entity is empty")
+		}
 		if _, ok := existRoleMap[role.GetName()]; ok {
 			return errors.Newf("role [%s] already exists", role.GetName())
 		}
@@ -2095,6 +2098,9 @@ func (mt *MetaTable) CheckIfRBACRestorable(ctx context.Context, req *milvuspb.Re
 
 	// check if grant can be restored
 	for _, grant := range meta.GetGrants() {
+		if funcutil.IsEmptyString(grant.GetRole().GetName()) {
+			return merr.WrapErrParameterInvalidMsg("role name in the grant entity is empty")
+		}
 		privName := grant.GetGrantor().GetPrivilege().GetName()
 		if util.IsAnyWord(privName) {
 			continue
@@ -2111,12 +2117,18 @@ func (mt *MetaTable) CheckIfRBACRestorable(ctx context.Context, req *milvuspb.Re
 	}
 	existUserMap := lo.SliceToMap(existUser, func(entity *milvuspb.UserResult) (string, struct{}) { return entity.GetUser().GetName(), struct{}{} })
 	for _, user := range meta.GetUsers() {
+		if funcutil.IsEmptyString(user.GetUser()) {
+			return merr.WrapErrParameterInvalidMsg("username in the user entity is empty")
+		}
 		if _, ok := existUserMap[user.GetUser()]; ok {
 			return errors.Newf("user [%s] already exists", user.GetUser())
 		}
 
 		// check if user-role can be restored
 		for _, role := range user.GetRoles() {
+			if funcutil.IsEmptyString(role.GetName()) {
+				return merr.WrapErrParameterInvalidMsg("role name in the role entity is empty")
+			}
 			if _, ok := existRoleAfterRestoreMap[role.GetName()]; !ok {
 				return errors.Newf("role [%s] does not exist", role.GetName())
 			}

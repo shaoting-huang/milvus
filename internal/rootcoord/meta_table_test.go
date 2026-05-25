@@ -2625,6 +2625,75 @@ func TestMetaTable_CheckIfRBACRestorable_Wildcard(t *testing.T) {
 	assert.NoError(t, mt.CheckIfRBACRestorable(context.TODO(), req))
 }
 
+func TestMetaTable_CheckIfRBACRestorableRejectsEmptyRoleMapping(t *testing.T) {
+	validRole := &milvuspb.RoleEntity{Name: "valid_role"}
+
+	tests := []struct {
+		name string
+		meta *milvuspb.RBACMeta
+	}{
+		{
+			name: "empty restored role",
+			meta: &milvuspb.RBACMeta{
+				Roles: []*milvuspb.RoleEntity{{Name: ""}},
+			},
+		},
+		{
+			name: "empty grant role",
+			meta: &milvuspb.RBACMeta{
+				Roles: []*milvuspb.RoleEntity{validRole},
+				Grants: []*milvuspb.GrantEntity{
+					{
+						Role: &milvuspb.RoleEntity{Name: ""},
+						Grantor: &milvuspb.GrantorEntity{
+							Privilege: &milvuspb.PrivilegeEntity{Name: util.PrivilegeNameForAPI("CreateCollection")},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "empty restored user",
+			meta: &milvuspb.RBACMeta{
+				Roles: []*milvuspb.RoleEntity{validRole},
+				Users: []*milvuspb.UserInfo{{User: "", Roles: []*milvuspb.RoleEntity{validRole}}},
+			},
+		},
+		{
+			name: "empty user role",
+			meta: &milvuspb.RBACMeta{
+				Roles: []*milvuspb.RoleEntity{validRole},
+				Users: []*milvuspb.UserInfo{{User: "ai_voice", Roles: []*milvuspb.RoleEntity{{Name: ""}}}},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			catalog := mocks.NewRootCoordCatalog(t)
+			catalog.EXPECT().ListRole(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+				Return(nil, nil).Maybe()
+			catalog.EXPECT().ListPrivilegeGroups(mock.Anything).
+				Return(nil, nil).Maybe()
+			catalog.EXPECT().ListUser(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+				Return(nil, nil).Maybe()
+
+			mt := &MetaTable{
+				dbName2Meta: map[string]*model.Database{
+					"not_commit": model.NewDatabase(1, "not_commit", pb.DatabaseState_DatabaseCreated, nil),
+				},
+				names:   newNameDb(),
+				aliases: newNameDb(),
+				catalog: catalog,
+			}
+
+			require.Error(t, mt.CheckIfRBACRestorable(context.TODO(), &milvuspb.RestoreRBACMetaRequest{
+				RBACMeta: test.meta,
+			}))
+		})
+	}
+}
+
 func TestMetaTable_PrivilegeGroup(t *testing.T) {
 	catalog := mocks.NewRootCoordCatalog(t)
 	catalog.EXPECT().ListPrivilegeGroups(mock.Anything).Return([]*milvuspb.PrivilegeGroupInfo{
