@@ -46,3 +46,10 @@ func MD5(str string) string {
 	data := md5.Sum([]byte(str))
 	return hex.EncodeToString(data[:])[8:24]
 }
+
+// GranteeID returns the full 128-bit MD5 digest used for RBAC grantee-id keys.
+func GranteeID(str string) string {
+	// #nosec
+	data := md5.Sum([]byte(str))
+	return hex.EncodeToString(data[:])
+}

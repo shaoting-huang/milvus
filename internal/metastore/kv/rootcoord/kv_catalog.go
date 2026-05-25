@@ -1044,6 +1044,7 @@ func (kc *Catalog) AlterGrant(ctx context.Context, tenant string, entity *milvus
 	var (
 		privilegeName = entity.Grantor.Privilege.Name
 		k             = funcutil.HandleTenantForEtcdKey(GranteePrefix, tenant, fmt.Sprintf("%s/%s/%s", entity.Role.Name, entity.Object.Name, funcutil.CombineObjectName(entity.DbName, entity.ObjectName)))
+		granteeKey    = k
 		idStr         string
 		v             string
 		err           error
@@ -1051,8 +1052,10 @@ func (kc *Catalog) AlterGrant(ctx context.Context, tenant string, entity *milvus
 
 	// Compatible with logic without db
 	if entity.DbName == util.DefaultDBName {
-		v, err = kc.Txn.Load(funcutil.HandleTenantForEtcdKey(GranteePrefix, tenant, fmt.Sprintf("%s/%s/%s", entity.Role.Name, entity.Object.Name, entity.ObjectName)))
+		oldKey := funcutil.HandleTenantForEtcdKey(GranteePrefix, tenant, fmt.Sprintf("%s/%s/%s", entity.Role.Name, entity.Object.Name, entity.ObjectName))
+		v, err = kc.Txn.Load(oldKey)
 		if err == nil {
+			granteeKey = oldKey
 			idStr = v
 		}
 	}
@@ -1071,13 +1074,17 @@ func (kc *Catalog) AlterGrant(ctx context.Context, tenant string, entity *milvus
 				return err
 			}
 
-			idStr = crypto.MD5(k)
+			idStr = crypto.GranteeID(k)
 			err = kc.Txn.Save(k, idStr)
 			if err != nil {
 				log.Error("fail to allocate id when altering the grant", zap.Error(err))
 				return err
 			}
 		}
+	}
+	idStr, err = kc.migrateLegacyGranteeID(ctx, tenant, granteeKey, idStr)
+	if err != nil {
+		return err
 	}
 	k = funcutil.HandleTenantForEtcdKey(GranteeIDPrefix, tenant, fmt.Sprintf("%s/%s", idStr, privilegeName))
 	_, err = kc.Txn.Load(k)
@@ -1109,6 +1116,59 @@ func (kc *Catalog) AlterGrant(ctx context.Context, tenant string, entity *milvus
 	return common.NewIgnorableError(fmt.Errorf("the privilege[%s] has been granted", privilegeName))
 }
 
+func (kc *Catalog) migrateLegacyGranteeID(ctx context.Context, tenant string, granteeKey string, idStr string) (string, error) {
+	if !isLegacyGranteeID(idStr) {
+		return idStr, nil
+	}
+
+	newID := crypto.GranteeID(granteeKey)
+	if idStr == newID {
+		return idStr, nil
+	}
+
+	oldGranteeIDKey := funcutil.HandleTenantForEtcdKey(GranteeIDPrefix, tenant, idStr)
+	oldGranteeIDPrefix := oldGranteeIDKey + "/"
+	idKeys, idValues, err := kc.Txn.LoadWithPrefix(oldGranteeIDPrefix)
+	if err != nil {
+		log.Warn("fail to load legacy grantee id entries",
+			zap.String("key", oldGranteeIDKey), zap.Error(err))
+		return "", err
+	}
+
+	saves := map[string]string{granteeKey: newID}
+	for i, idKey := range idKeys {
+		privilegeName := typeutil.After(idKey, oldGranteeIDPrefix)
+		if privilegeName == "" {
+			log.Warn("failed to extract privilege name from legacy grantee id key",
+				zap.String("idKey", idKey), zap.String("prefix", oldGranteeIDPrefix))
+			continue
+		}
+		saves[funcutil.HandleTenantForEtcdKey(GranteeIDPrefix, tenant, fmt.Sprintf("%s/%s", newID, privilegeName))] = idValues[i]
+	}
+
+	if err := kc.Txn.MultiSaveAndRemove(saves, nil); err != nil {
+		log.Warn("fail to migrate legacy grantee id",
+			zap.String("granteeKey", granteeKey),
+			zap.String("oldID", idStr),
+			zap.String("newID", newID),
+			zap.Error(err))
+		return "", err
+	}
+	return newID, nil
+}
+
+func isLegacyGranteeID(idStr string) bool {
+	if len(idStr) != 16 {
+		return false
+	}
+	for _, ch := range idStr {
+		if (ch < '0' || ch > '9') && (ch < 'a' || ch > 'f') && (ch < 'A' || ch > 'F') {
+			return false
+		}
+	}
+	return true
+}
+
 func (kc *Catalog) ListGrant(ctx context.Context, tenant string, entity *milvuspb.GrantEntity) ([]*milvuspb.GrantEntity, error) {
 	var entities []*milvuspb.GrantEntity
 
@@ -1120,13 +1180,14 @@ func (kc *Catalog) ListGrant(ctx context.Context, tenant string, entity *milvusp
 			return nil
 		}
 		granteeIDKey := funcutil.HandleTenantForEtcdKey(GranteeIDPrefix, tenant, v)
-		keys, values, err := kc.Txn.LoadWithPrefix(granteeIDKey)
+		granteeIDPrefix := granteeIDKey + "/"
+		keys, values, err := kc.Txn.LoadWithPrefix(granteeIDPrefix)
 		if err != nil {
-			log.Error("fail to load the grantee ids", zap.String("key", granteeIDKey), zap.Error(err))
+			log.Error("fail to load the grantee ids", zap.String("key", granteeIDPrefix), zap.Error(err))
 			return err
 		}
 		for i, key := range keys {
-			granteeIDInfos := typeutil.AfterN(key, granteeIDKey+"/", "/")
+			granteeIDInfos := typeutil.AfterN(key, granteeIDPrefix, "/")
 			if len(granteeIDInfos) != 1 {
 				log.Warn("invalid grantee id", zap.String("string", key), zap.String("sub_string", granteeIDKey))
 				continue
@@ -1217,9 +1278,43 @@ func (kc *Catalog) DeleteGrant(ctx context.Context, tenant string, role *milvusp
 		log.Warn("fail to load grant privilege entities", zap.String("key", k), zap.Error(err))
 		return err
 	}
-	for _, v := range values {
-		granteeIDKey := funcutil.HandleTenantForEtcdKey(GranteeIDPrefix, tenant, v+"/")
-		removeKeys = append(removeKeys, granteeIDKey)
+	removedIDOrder := make([]string, 0, len(values))
+	removedIDs := make(map[string]struct{})
+	for _, idStr := range values {
+		if _, ok := removedIDs[idStr]; ok {
+			continue
+		}
+		removedIDs[idStr] = struct{}{}
+		removedIDOrder = append(removedIDOrder, idStr)
+	}
+	if len(removedIDOrder) > 0 {
+		granteePrefix := funcutil.HandleTenantForEtcdKey(GranteePrefix, tenant, "") + "/"
+		keys, allValues, err := kc.Txn.LoadWithPrefix(granteePrefix)
+		if err != nil {
+			log.Warn("fail to load all grant privilege entities", zap.String("key", granteePrefix), zap.Error(err))
+			return err
+		}
+		survivingIDs := make(map[string]bool)
+		for i, key := range keys {
+			if i >= len(allValues) {
+				continue
+			}
+			idStr := allValues[i]
+			if _, removed := removedIDs[idStr]; !removed {
+				continue
+			}
+			grantInfos := typeutil.AfterN(key, granteePrefix, "/")
+			if len(grantInfos) != 3 || grantInfos[0] != role.Name {
+				survivingIDs[idStr] = true
+			}
+		}
+		for _, idStr := range removedIDOrder {
+			if survivingIDs[idStr] {
+				continue
+			}
+			granteeIDKey := funcutil.HandleTenantForEtcdKey(GranteeIDPrefix, tenant, idStr+"/")
+			removeKeys = append(removeKeys, granteeIDKey)
+		}
 	}
 
 	if err = kc.Txn.MultiSaveAndRemoveWithPrefix(nil, removeKeys); err != nil {
@@ -1244,13 +1339,14 @@ func (kc *Catalog) ListPolicy(ctx context.Context, tenant string) ([]string, err
 			continue
 		}
 		granteeIDKey := funcutil.HandleTenantForEtcdKey(GranteeIDPrefix, tenant, values[i])
-		idKeys, _, err := kc.Txn.LoadWithPrefix(granteeIDKey)
+		granteeIDPrefix := granteeIDKey + "/"
+		idKeys, _, err := kc.Txn.LoadWithPrefix(granteeIDPrefix)
 		if err != nil {
-			log.Error("fail to load the grantee ids", zap.String("key", granteeIDKey), zap.Error(err))
+			log.Error("fail to load the grantee ids", zap.String("key", granteeIDPrefix), zap.Error(err))
 			return []string{}, err
 		}
 		for _, idKey := range idKeys {
-			granteeIDInfos := typeutil.AfterN(idKey, granteeIDKey+"/", "/")
+			granteeIDInfos := typeutil.AfterN(idKey, granteeIDPrefix, "/")
 			if len(granteeIDInfos) != 1 {
 				log.Warn("invalid grantee id", zap.String("string", idKey), zap.String("sub_string", granteeIDKey))
 				continue

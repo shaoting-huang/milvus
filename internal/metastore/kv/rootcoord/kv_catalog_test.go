@@ -22,6 +22,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/kv"
 	etcdkv "github.com/milvus-io/milvus/internal/kv/etcd"
+	memkv "github.com/milvus-io/milvus/internal/kv/mem"
 	"github.com/milvus-io/milvus/internal/kv/mocks"
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/metastore/model"
@@ -2189,14 +2190,14 @@ func TestRBAC_Grant(t *testing.T) {
 		)
 
 		validRoleKey := funcutil.HandleTenantForEtcdKey(GranteePrefix, tenant, fmt.Sprintf("%s/%s/%s", validRole, object, objName))
-		validRoleValue := crypto.MD5(validRoleKey)
+		validRoleValue := crypto.GranteeID(validRoleKey)
 
 		invalidRoleKey := funcutil.HandleTenantForEtcdKey(GranteePrefix, tenant, fmt.Sprintf("%s/%s/%s", invalidRole, object, objName))
 		invalidRoleKeyWithDb := funcutil.HandleTenantForEtcdKey(GranteePrefix, tenant, fmt.Sprintf("%s/%s/%s", invalidRole, object, funcutil.CombineObjectName(util.DefaultDBName, objName)))
 
 		keyNotExistRoleKey := funcutil.HandleTenantForEtcdKey(GranteePrefix, tenant, fmt.Sprintf("%s/%s/%s", keyNotExistRole, object, objName))
 		keyNotExistRoleKeyWithDb := funcutil.HandleTenantForEtcdKey(GranteePrefix, tenant, fmt.Sprintf("%s/%s/%s", keyNotExistRole, object, funcutil.CombineObjectName(util.DefaultDBName, objName)))
-		keyNotExistRoleValueWithDb := crypto.MD5(keyNotExistRoleKeyWithDb)
+		keyNotExistRoleValueWithDb := crypto.GranteeID(keyNotExistRoleKeyWithDb)
 
 		errorSaveRoleKey := funcutil.HandleTenantForEtcdKey(GranteePrefix, tenant, fmt.Sprintf("%s/%s/%s", errorSaveRole, object, objName))
 		errorSaveRoleKeyWithDb := funcutil.HandleTenantForEtcdKey(GranteePrefix, tenant, fmt.Sprintf("%s/%s/%s", errorSaveRole, object, funcutil.CombineObjectName(util.DefaultDBName, objName)))
@@ -2437,9 +2438,10 @@ func TestRBAC_Grant(t *testing.T) {
 			func(key string) []string {
 				// Mock kv_catalog.go:ListGrant:L871
 				if strings.Contains(key, GranteeIDPrefix) {
+					granteeIDKey := strings.TrimSuffix(key, "/")
 					return []string{
-						fmt.Sprintf("%s/%s", key, "PrivilegeLoad"),
-						fmt.Sprintf("%s/%s", key, "PrivilegeRelease"),
+						fmt.Sprintf("%s/%s", granteeIDKey, "PrivilegeLoad"),
+						fmt.Sprintf("%s/%s", granteeIDKey, "PrivilegeRelease"),
 					}
 				}
 
@@ -2542,10 +2544,11 @@ func TestRBAC_Grant(t *testing.T) {
 				contains := strings.Contains(key, GranteeIDPrefix)
 				if contains {
 					if secondLoadWithPrefixReturn.Load() {
+						granteeIDKey := strings.TrimSuffix(key, "/")
 						return []string{
-							fmt.Sprintf("%s/%s", key, "PrivilegeLoad"),
-							fmt.Sprintf("%s/%s", key, "PrivilegeRelease"),
-							fmt.Sprintf("%s/%s", key, "random/a/b/c"),
+							fmt.Sprintf("%s/%s", granteeIDKey, "PrivilegeLoad"),
+							fmt.Sprintf("%s/%s", granteeIDKey, "PrivilegeRelease"),
+							fmt.Sprintf("%s/%s", granteeIDKey, "random/a/b/c"),
 						}
 					}
 					return nil
@@ -2621,6 +2624,233 @@ func TestRBAC_Grant(t *testing.T) {
 				}
 			})
 		}
+	})
+}
+
+func TestRBAC_GranteeIDLengthAndLegacyCompatibility(t *testing.T) {
+	ctx := context.Background()
+	tenant := util.DefaultTenant
+	objectType := commonpb.ObjectType_Collection.String()
+
+	newGrantEntity := func(roleName string, objectName string, privilegeName string) *milvuspb.GrantEntity {
+		return &milvuspb.GrantEntity{
+			Role:       &milvuspb.RoleEntity{Name: roleName},
+			Object:     &milvuspb.ObjectEntity{Name: objectType},
+			ObjectName: objectName,
+			DbName:     util.DefaultDBName,
+			Grantor: &milvuspb.GrantorEntity{
+				User:      &milvuspb.UserEntity{Name: util.UserRoot},
+				Privilege: &milvuspb.PrivilegeEntity{Name: privilegeName},
+			},
+		}
+	}
+	granteeKey := func(roleName string, objectName string) string {
+		return funcutil.HandleTenantForEtcdKey(GranteePrefix, tenant,
+			fmt.Sprintf("%s/%s/%s", roleName, objectType, funcutil.CombineObjectName(util.DefaultDBName, objectName)))
+	}
+	legacyGranteeKey := func(roleName string, objectName string) string {
+		return funcutil.HandleTenantForEtcdKey(GranteePrefix, tenant,
+			fmt.Sprintf("%s/%s/%s", roleName, objectType, objectName))
+	}
+	granteeIDKey := func(id string, privilegeName string) string {
+		return funcutil.HandleTenantForEtcdKey(GranteeIDPrefix, tenant, fmt.Sprintf("%s/%s", id, privilegeName))
+	}
+	requireGrantPrivileges := func(t *testing.T, c metastore.RootCoordCatalog, roleName string, objectName string, privileges ...string) {
+		t.Helper()
+
+		grants, err := c.ListGrant(ctx, tenant, &milvuspb.GrantEntity{
+			Role:       &milvuspb.RoleEntity{Name: roleName},
+			Object:     &milvuspb.ObjectEntity{Name: objectType},
+			ObjectName: objectName,
+			DbName:     util.DefaultDBName,
+		})
+		require.NoError(t, err)
+		require.Len(t, grants, len(privileges))
+
+		actual := make([]string, 0, len(grants))
+		for _, grant := range grants {
+			actual = append(actual, grant.GetGrantor().GetPrivilege().GetName())
+		}
+		assert.ElementsMatch(t, privileges, actual)
+	}
+
+	t.Run("new grant stores full length grantee id", func(t *testing.T) {
+		kv := memkv.NewMemoryKV()
+		c := &Catalog{Txn: kv}
+		roleName := "new_id_role"
+		objectName := "new_id_collection"
+		privilegeName := commonpb.ObjectPrivilege_PrivilegeInsert.String()
+
+		err := c.AlterGrant(ctx, tenant, newGrantEntity(roleName, objectName, privilegeName), milvuspb.OperatePrivilegeType_Grant)
+		require.NoError(t, err)
+
+		key := granteeKey(roleName, objectName)
+		id, err := kv.Load(key)
+		require.NoError(t, err)
+		assert.Len(t, id, 32)
+		assert.Equal(t, crypto.GranteeID(key), id)
+
+		user, err := kv.Load(granteeIDKey(id, privilegeName))
+		require.NoError(t, err)
+		assert.Equal(t, util.UserRoot, user)
+	})
+
+	t.Run("legacy grantee id lists migrates and revokes", func(t *testing.T) {
+		kv := memkv.NewMemoryKV()
+		c := &Catalog{Txn: kv}
+		roleName := "legacy_id_role"
+		objectName := "legacy_id_collection"
+		insertPrivilege := commonpb.ObjectPrivilege_PrivilegeInsert.String()
+		deletePrivilege := commonpb.ObjectPrivilege_PrivilegeDelete.String()
+		key := granteeKey(roleName, objectName)
+		legacyID := crypto.MD5(key)
+		require.Len(t, legacyID, 16)
+		require.NoError(t, kv.Save(key, legacyID))
+		legacyInsertKey := granteeIDKey(legacyID, insertPrivilege)
+		require.NoError(t, kv.Save(legacyInsertKey, util.UserRoot))
+
+		requireGrantPrivileges(t, c, roleName, objectName, "Insert")
+		policies, err := c.ListPolicy(ctx, tenant)
+		require.NoError(t, err)
+		require.Len(t, policies, 1)
+		assert.Equal(t, funcutil.PolicyForPrivilege(roleName, objectType, objectName, insertPrivilege, util.DefaultDBName), policies[0])
+
+		err = c.AlterGrant(ctx, tenant, newGrantEntity(roleName, objectName, deletePrivilege), milvuspb.OperatePrivilegeType_Grant)
+		require.NoError(t, err)
+
+		newID, err := kv.Load(key)
+		require.NoError(t, err)
+		require.Len(t, newID, 32)
+		assert.Equal(t, crypto.GranteeID(key), newID)
+		_, err = kv.Load(legacyInsertKey)
+		require.NoError(t, err)
+
+		user, err := kv.Load(granteeIDKey(newID, insertPrivilege))
+		require.NoError(t, err)
+		assert.Equal(t, util.UserRoot, user)
+		user, err = kv.Load(granteeIDKey(newID, deletePrivilege))
+		require.NoError(t, err)
+		assert.Equal(t, util.UserRoot, user)
+
+		err = c.AlterGrant(ctx, tenant, newGrantEntity(roleName, objectName, insertPrivilege), milvuspb.OperatePrivilegeType_Revoke)
+		require.NoError(t, err)
+		requireGrantPrivileges(t, c, roleName, objectName, "Delete")
+	})
+
+	t.Run("legacy no-db grantee id migrates", func(t *testing.T) {
+		kv := memkv.NewMemoryKV()
+		c := &Catalog{Txn: kv}
+		roleName := "legacy_no_db_role"
+		objectName := "legacy_no_db_collection"
+		insertPrivilege := commonpb.ObjectPrivilege_PrivilegeInsert.String()
+		deletePrivilege := commonpb.ObjectPrivilege_PrivilegeDelete.String()
+		key := legacyGranteeKey(roleName, objectName)
+		legacyID := crypto.MD5(key)
+		require.NoError(t, kv.Save(key, legacyID))
+		require.NoError(t, kv.Save(granteeIDKey(legacyID, insertPrivilege), util.UserRoot))
+
+		requireGrantPrivileges(t, c, roleName, objectName, "Insert")
+
+		err := c.AlterGrant(ctx, tenant, newGrantEntity(roleName, objectName, deletePrivilege), milvuspb.OperatePrivilegeType_Grant)
+		require.NoError(t, err)
+
+		newID, err := kv.Load(key)
+		require.NoError(t, err)
+		require.Len(t, newID, 32)
+		assert.Equal(t, crypto.GranteeID(key), newID)
+		requireGrantPrivileges(t, c, roleName, objectName, "Insert", "Delete")
+	})
+
+	t.Run("legacy grantee id revokes directly", func(t *testing.T) {
+		kv := memkv.NewMemoryKV()
+		c := &Catalog{Txn: kv}
+		roleName := "legacy_revoke_role"
+		objectName := "legacy_revoke_collection"
+		insertPrivilege := commonpb.ObjectPrivilege_PrivilegeInsert.String()
+		key := granteeKey(roleName, objectName)
+		legacyID := crypto.MD5(key)
+		require.NoError(t, kv.Save(key, legacyID))
+		legacyInsertKey := granteeIDKey(legacyID, insertPrivilege)
+		require.NoError(t, kv.Save(legacyInsertKey, util.UserRoot))
+
+		err := c.AlterGrant(ctx, tenant, newGrantEntity(roleName, objectName, insertPrivilege), milvuspb.OperatePrivilegeType_Revoke)
+		require.NoError(t, err)
+
+		newID, err := kv.Load(key)
+		require.NoError(t, err)
+		require.Len(t, newID, 32)
+		assert.Equal(t, crypto.GranteeID(key), newID)
+		_, err = kv.Load(legacyInsertKey)
+		require.NoError(t, err)
+		requireGrantPrivileges(t, c, roleName, objectName)
+	})
+
+	t.Run("legacy grantee id migration preserves other references", func(t *testing.T) {
+		kv := memkv.NewMemoryKV()
+		c := &Catalog{Txn: kv}
+		objectName := "legacy_shared_collection"
+		insertPrivilege := commonpb.ObjectPrivilege_PrivilegeInsert.String()
+		deletePrivilege := commonpb.ObjectPrivilege_PrivilegeDelete.String()
+		donorRole := "legacy_shared_donor"
+		victimRole := "legacy_shared_victim"
+		donorKey := granteeKey(donorRole, objectName)
+		victimKey := granteeKey(victimRole, objectName)
+		sharedLegacyID := crypto.MD5(donorKey)
+		require.NoError(t, kv.Save(donorKey, sharedLegacyID))
+		require.NoError(t, kv.Save(victimKey, sharedLegacyID))
+		legacyInsertKey := granteeIDKey(sharedLegacyID, insertPrivilege)
+		require.NoError(t, kv.Save(legacyInsertKey, util.UserRoot))
+
+		err := c.AlterGrant(ctx, tenant, newGrantEntity(victimRole, objectName, deletePrivilege), milvuspb.OperatePrivilegeType_Grant)
+		require.NoError(t, err)
+
+		victimID, err := kv.Load(victimKey)
+		require.NoError(t, err)
+		require.Len(t, victimID, 32)
+		assert.Equal(t, crypto.GranteeID(victimKey), victimID)
+		_, err = kv.Load(legacyInsertKey)
+		require.NoError(t, err)
+		requireGrantPrivileges(t, c, donorRole, objectName, "Insert")
+		requireGrantPrivileges(t, c, victimRole, objectName, "Insert", "Delete")
+	})
+
+	t.Run("role delete preserves other legacy grantee id references", func(t *testing.T) {
+		kv := memkv.NewMemoryKV()
+		c := &Catalog{Txn: kv}
+		insertPrivilege := commonpb.ObjectPrivilege_PrivilegeInsert.String()
+		deletedRole := "legacy_role_delete_victim"
+		untouchedRole := "legacy_role_delete_donor"
+		objectName := "legacy_role_delete_collection"
+		deletedKey := granteeKey(deletedRole, objectName)
+		untouchedKey := granteeKey(untouchedRole, objectName)
+		sharedLegacyID := crypto.MD5(untouchedKey)
+		require.NoError(t, kv.Save(deletedKey, sharedLegacyID))
+		require.NoError(t, kv.Save(untouchedKey, sharedLegacyID))
+		legacyInsertKey := granteeIDKey(sharedLegacyID, insertPrivilege)
+		require.NoError(t, kv.Save(legacyInsertKey, util.UserRoot))
+
+		err := c.DeleteGrant(ctx, tenant, &milvuspb.RoleEntity{Name: deletedRole})
+		require.NoError(t, err)
+
+		requireGrantPrivileges(t, c, untouchedRole, objectName, "Insert")
+		_, err = kv.Load(legacyInsertKey)
+		require.NoError(t, err)
+	})
+
+	t.Run("grantee id reads use exact id namespace", func(t *testing.T) {
+		kv := memkv.NewMemoryKV()
+		c := &Catalog{Txn: kv}
+		roleName := "legacy_prefix_role"
+		objectName := "legacy_prefix_collection"
+		key := granteeKey(roleName, objectName)
+		legacyID := "aaaaaaaaaaaaaaaa"
+		require.NoError(t, kv.Save(key, legacyID))
+		require.NoError(t, kv.Save(granteeIDKey(legacyID+"extra", commonpb.ObjectPrivilege_PrivilegeInsert.String()), util.UserRoot))
+
+		requireGrantPrivileges(t, c, roleName, objectName)
+		policies, err := c.ListPolicy(ctx, tenant)
+		require.NoError(t, err)
+		assert.Empty(t, policies)
 	})
 }
 
