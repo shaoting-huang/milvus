@@ -23,6 +23,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/json"
 	etcdkv "github.com/milvus-io/milvus/internal/kv/etcd"
+	memkv "github.com/milvus-io/milvus/internal/kv/mem"
 	"github.com/milvus-io/milvus/internal/kv/mocks"
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/metastore/model"
@@ -2282,14 +2283,14 @@ func TestRBAC_Grant(t *testing.T) {
 		)
 
 		validRoleKey := fmt.Sprintf("%s/%s/%s/%s", GranteePrefix, validRole, object, objName)
-		validRoleValue := crypto.MD5(validRoleKey)
+		validRoleValue := crypto.GranteeID(validRoleKey)
 
 		invalidRoleKey := fmt.Sprintf("%s/%s/%s/%s", GranteePrefix, invalidRole, object, objName)
 		invalidRoleKeyWithDb := fmt.Sprintf("%s/%s/%s/%s", GranteePrefix, invalidRole, object, funcutil.CombineObjectName(util.DefaultDBName, objName))
 
 		keyNotExistRoleKey := fmt.Sprintf("%s/%s/%s/%s", GranteePrefix, keyNotExistRole, object, objName)
 		keyNotExistRoleKeyWithDb := fmt.Sprintf("%s/%s/%s/%s", GranteePrefix, keyNotExistRole, object, funcutil.CombineObjectName(util.DefaultDBName, objName))
-		keyNotExistRoleValueWithDb := crypto.MD5(keyNotExistRoleKeyWithDb)
+		keyNotExistRoleValueWithDb := crypto.GranteeID(keyNotExistRoleKeyWithDb)
 
 		errorSaveRoleKey := fmt.Sprintf("%s/%s/%s/%s", GranteePrefix, errorSaveRole, object, objName)
 		errorSaveRoleKeyWithDb := fmt.Sprintf("%s/%s/%s/%s", GranteePrefix, errorSaveRole, object, funcutil.CombineObjectName(util.DefaultDBName, objName))
@@ -2730,6 +2731,256 @@ func TestRBAC_Grant(t *testing.T) {
 				}
 			})
 		}
+	})
+}
+
+func TestRBAC_GranteeIDLengthAndLegacyCompatibility(t *testing.T) {
+	ctx := context.Background()
+
+	newGrantEntity := func(roleName string, objectName string, privilegeName string) *milvuspb.GrantEntity {
+		return &milvuspb.GrantEntity{
+			Role:       &milvuspb.RoleEntity{Name: roleName},
+			Object:     &milvuspb.ObjectEntity{Name: commonpb.ObjectType_Collection.String()},
+			ObjectName: objectName,
+			DbName:     util.DefaultDBName,
+			Grantor: &milvuspb.GrantorEntity{
+				User:      &milvuspb.UserEntity{Name: util.UserRoot},
+				Privilege: &milvuspb.PrivilegeEntity{Name: privilegeName},
+			},
+		}
+	}
+	requireGrantPrivileges := func(t *testing.T, c metastore.RootCoordCatalog, roleName string, objectName string, privileges ...string) {
+		t.Helper()
+
+		grants, err := c.ListGrant(ctx, util.DefaultTenant, &milvuspb.GrantEntity{
+			Role:       &milvuspb.RoleEntity{Name: roleName},
+			Object:     &milvuspb.ObjectEntity{Name: commonpb.ObjectType_Collection.String()},
+			ObjectName: objectName,
+			DbName:     util.DefaultDBName,
+		})
+		require.NoError(t, err)
+		require.Len(t, grants, len(privileges))
+
+		actual := make([]string, 0, len(grants))
+		for _, grant := range grants {
+			actual = append(actual, grant.GetGrantor().GetPrivilege().GetName())
+		}
+		assert.ElementsMatch(t, privileges, actual)
+	}
+
+	t.Run("new grant stores full length grantee id", func(t *testing.T) {
+		kv := memkv.NewMemoryKV()
+		c := NewCatalog(kv)
+		roleName := "new_id_role"
+		objectName := "new_id_collection"
+		privilegeName := commonpb.ObjectPrivilege_PrivilegeInsert.String()
+
+		err := c.AlterGrant(ctx, util.DefaultTenant, newGrantEntity(roleName, objectName, privilegeName), milvuspb.OperatePrivilegeType_Grant)
+		require.NoError(t, err)
+
+		granteeKey := fmt.Sprintf("%s/%s/%s/%s", GranteePrefix, roleName, commonpb.ObjectType_Collection.String(), funcutil.CombineObjectName(util.DefaultDBName, objectName))
+		id, err := kv.Load(ctx, granteeKey)
+		require.NoError(t, err)
+		assert.Len(t, id, 32)
+		assert.Equal(t, crypto.GranteeID(granteeKey), id)
+
+		granteeIDKey := fmt.Sprintf("%s/%s/%s", GranteeIDPrefix, id, privilegeName)
+		user, err := kv.Load(ctx, granteeIDKey)
+		require.NoError(t, err)
+		assert.Equal(t, util.UserRoot, user)
+	})
+
+	t.Run("legacy grantee id lists migrates and revokes", func(t *testing.T) {
+		kv := memkv.NewMemoryKV()
+		c := NewCatalog(kv)
+		roleName := "legacy_id_role"
+		objectName := "legacy_id_collection"
+		objectType := commonpb.ObjectType_Collection.String()
+		insertPrivilege := commonpb.ObjectPrivilege_PrivilegeInsert.String()
+		deletePrivilege := commonpb.ObjectPrivilege_PrivilegeDelete.String()
+		granteeKey := fmt.Sprintf("%s/%s/%s/%s", GranteePrefix, roleName, objectType, funcutil.CombineObjectName(util.DefaultDBName, objectName))
+		legacyID := crypto.MD5(granteeKey)
+		require.Len(t, legacyID, 16)
+		require.NoError(t, kv.Save(ctx, granteeKey, legacyID))
+		legacyInsertKey := fmt.Sprintf("%s/%s/%s", GranteeIDPrefix, legacyID, insertPrivilege)
+		require.NoError(t, kv.Save(ctx, legacyInsertKey, util.UserRoot))
+
+		grants, err := c.ListGrant(ctx, util.DefaultTenant, &milvuspb.GrantEntity{
+			Role:       &milvuspb.RoleEntity{Name: roleName},
+			Object:     &milvuspb.ObjectEntity{Name: objectType},
+			ObjectName: objectName,
+			DbName:     util.DefaultDBName,
+		})
+		require.NoError(t, err)
+		require.Len(t, grants, 1)
+		assert.Equal(t, "Insert", grants[0].GetGrantor().GetPrivilege().GetName())
+
+		policies, err := c.ListPolicy(ctx, util.DefaultTenant)
+		require.NoError(t, err)
+		require.Len(t, policies, 1)
+		assert.Equal(t, "Insert", policies[0].GetGrantor().GetPrivilege().GetName())
+
+		err = c.AlterGrant(ctx, util.DefaultTenant, newGrantEntity(roleName, objectName, deletePrivilege), milvuspb.OperatePrivilegeType_Grant)
+		require.NoError(t, err)
+
+		newID, err := kv.Load(ctx, granteeKey)
+		require.NoError(t, err)
+		require.Len(t, newID, 32)
+		assert.Equal(t, crypto.GranteeID(granteeKey), newID)
+		_, err = kv.Load(ctx, legacyInsertKey)
+		require.NoError(t, err)
+
+		newInsertKey := fmt.Sprintf("%s/%s/%s", GranteeIDPrefix, newID, insertPrivilege)
+		user, err := kv.Load(ctx, newInsertKey)
+		require.NoError(t, err)
+		assert.Equal(t, util.UserRoot, user)
+		newDeleteKey := fmt.Sprintf("%s/%s/%s", GranteeIDPrefix, newID, deletePrivilege)
+		user, err = kv.Load(ctx, newDeleteKey)
+		require.NoError(t, err)
+		assert.Equal(t, util.UserRoot, user)
+
+		err = c.AlterGrant(ctx, util.DefaultTenant, newGrantEntity(roleName, objectName, insertPrivilege), milvuspb.OperatePrivilegeType_Revoke)
+		require.NoError(t, err)
+		grants, err = c.ListGrant(ctx, util.DefaultTenant, &milvuspb.GrantEntity{
+			Role:       &milvuspb.RoleEntity{Name: roleName},
+			Object:     &milvuspb.ObjectEntity{Name: objectType},
+			ObjectName: objectName,
+			DbName:     util.DefaultDBName,
+		})
+		require.NoError(t, err)
+		require.Len(t, grants, 1)
+		assert.Equal(t, "Delete", grants[0].GetGrantor().GetPrivilege().GetName())
+	})
+
+	t.Run("legacy grantee id revokes directly", func(t *testing.T) {
+		kv := memkv.NewMemoryKV()
+		c := NewCatalog(kv)
+		roleName := "legacy_revoke_role"
+		objectName := "legacy_revoke_collection"
+		objectType := commonpb.ObjectType_Collection.String()
+		insertPrivilege := commonpb.ObjectPrivilege_PrivilegeInsert.String()
+		granteeKey := fmt.Sprintf("%s/%s/%s/%s", GranteePrefix, roleName, objectType, funcutil.CombineObjectName(util.DefaultDBName, objectName))
+		legacyID := crypto.MD5(granteeKey)
+		require.NoError(t, kv.Save(ctx, granteeKey, legacyID))
+		legacyInsertKey := fmt.Sprintf("%s/%s/%s", GranteeIDPrefix, legacyID, insertPrivilege)
+		require.NoError(t, kv.Save(ctx, legacyInsertKey, util.UserRoot))
+
+		err := c.AlterGrant(ctx, util.DefaultTenant, newGrantEntity(roleName, objectName, insertPrivilege), milvuspb.OperatePrivilegeType_Revoke)
+		require.NoError(t, err)
+
+		newID, err := kv.Load(ctx, granteeKey)
+		require.NoError(t, err)
+		require.Len(t, newID, 32)
+		assert.Equal(t, crypto.GranteeID(granteeKey), newID)
+		_, err = kv.Load(ctx, legacyInsertKey)
+		require.NoError(t, err)
+		requireGrantPrivileges(t, c, roleName, objectName)
+	})
+
+	t.Run("legacy grantee id migration preserves other references", func(t *testing.T) {
+		kv := memkv.NewMemoryKV()
+		c := NewCatalog(kv)
+		objectName := "legacy_shared_collection"
+		objectType := commonpb.ObjectType_Collection.String()
+		insertPrivilege := commonpb.ObjectPrivilege_PrivilegeInsert.String()
+		deletePrivilege := commonpb.ObjectPrivilege_PrivilegeDelete.String()
+		donorRole := "legacy_shared_donor"
+		victimRole := "legacy_shared_victim"
+		donorKey := fmt.Sprintf("%s/%s/%s/%s", GranteePrefix, donorRole, objectType, funcutil.CombineObjectName(util.DefaultDBName, objectName))
+		victimKey := fmt.Sprintf("%s/%s/%s/%s", GranteePrefix, victimRole, objectType, funcutil.CombineObjectName(util.DefaultDBName, objectName))
+		sharedLegacyID := crypto.MD5(donorKey)
+		require.NoError(t, kv.Save(ctx, donorKey, sharedLegacyID))
+		require.NoError(t, kv.Save(ctx, victimKey, sharedLegacyID))
+		legacyInsertKey := fmt.Sprintf("%s/%s/%s", GranteeIDPrefix, sharedLegacyID, insertPrivilege)
+		require.NoError(t, kv.Save(ctx, legacyInsertKey, util.UserRoot))
+
+		err := c.AlterGrant(ctx, util.DefaultTenant, newGrantEntity(victimRole, objectName, deletePrivilege), milvuspb.OperatePrivilegeType_Grant)
+		require.NoError(t, err)
+
+		victimID, err := kv.Load(ctx, victimKey)
+		require.NoError(t, err)
+		require.Len(t, victimID, 32)
+		assert.Equal(t, crypto.GranteeID(victimKey), victimID)
+		_, err = kv.Load(ctx, legacyInsertKey)
+		require.NoError(t, err)
+		requireGrantPrivileges(t, c, donorRole, objectName, "Insert")
+		requireGrantPrivileges(t, c, victimRole, objectName, "Insert", "Delete")
+	})
+
+	t.Run("collection rename preserves other legacy grantee id references", func(t *testing.T) {
+		kv := memkv.NewMemoryKV()
+		c := NewCatalog(kv)
+		objectType := commonpb.ObjectType_Collection.String()
+		insertPrivilege := commonpb.ObjectPrivilege_PrivilegeInsert.String()
+		renamedRole := "legacy_rename_victim"
+		untouchedRole := "legacy_rename_donor"
+		oldObjectName := "legacy_rename_old_collection"
+		newObjectName := "legacy_rename_new_collection"
+		untouchedObjectName := "legacy_rename_untouched_collection"
+		renamedKey := fmt.Sprintf("%s/%s/%s/%s", GranteePrefix, renamedRole, objectType, funcutil.CombineObjectName(util.DefaultDBName, oldObjectName))
+		untouchedKey := fmt.Sprintf("%s/%s/%s/%s", GranteePrefix, untouchedRole, objectType, funcutil.CombineObjectName(util.DefaultDBName, untouchedObjectName))
+		sharedLegacyID := crypto.MD5(untouchedKey)
+		require.NoError(t, kv.Save(ctx, renamedKey, sharedLegacyID))
+		require.NoError(t, kv.Save(ctx, untouchedKey, sharedLegacyID))
+		legacyInsertKey := fmt.Sprintf("%s/%s/%s", GranteeIDPrefix, sharedLegacyID, insertPrivilege)
+		require.NoError(t, kv.Save(ctx, legacyInsertKey, util.UserRoot))
+
+		err := c.MigrateGrantCollectionName(ctx, util.DefaultTenant, util.DefaultDBName, oldObjectName, util.DefaultDBName, newObjectName)
+		require.NoError(t, err)
+
+		requireGrantPrivileges(t, c, renamedRole, newObjectName, "Insert")
+		requireGrantPrivileges(t, c, untouchedRole, untouchedObjectName, "Insert")
+		_, err = kv.Load(ctx, legacyInsertKey)
+		require.NoError(t, err)
+	})
+
+	t.Run("collection drop preserves other legacy grantee id references", func(t *testing.T) {
+		kv := memkv.NewMemoryKV()
+		c := NewCatalog(kv)
+		objectType := commonpb.ObjectType_Collection.String()
+		insertPrivilege := commonpb.ObjectPrivilege_PrivilegeInsert.String()
+		droppedRole := "legacy_drop_victim"
+		untouchedRole := "legacy_drop_donor"
+		droppedObjectName := "legacy_drop_collection"
+		untouchedObjectName := "legacy_drop_untouched_collection"
+		droppedKey := fmt.Sprintf("%s/%s/%s/%s", GranteePrefix, droppedRole, objectType, funcutil.CombineObjectName(util.DefaultDBName, droppedObjectName))
+		untouchedKey := fmt.Sprintf("%s/%s/%s/%s", GranteePrefix, untouchedRole, objectType, funcutil.CombineObjectName(util.DefaultDBName, untouchedObjectName))
+		sharedLegacyID := crypto.MD5(untouchedKey)
+		require.NoError(t, kv.Save(ctx, droppedKey, sharedLegacyID))
+		require.NoError(t, kv.Save(ctx, untouchedKey, sharedLegacyID))
+		legacyInsertKey := fmt.Sprintf("%s/%s/%s", GranteeIDPrefix, sharedLegacyID, insertPrivilege)
+		require.NoError(t, kv.Save(ctx, legacyInsertKey, util.UserRoot))
+
+		err := c.DeleteGrantByCollectionName(ctx, util.DefaultTenant, util.DefaultDBName, droppedObjectName)
+		require.NoError(t, err)
+
+		requireGrantPrivileges(t, c, untouchedRole, untouchedObjectName, "Insert")
+		_, err = kv.Load(ctx, legacyInsertKey)
+		require.NoError(t, err)
+	})
+
+	t.Run("role delete preserves other legacy grantee id references", func(t *testing.T) {
+		kv := memkv.NewMemoryKV()
+		c := NewCatalog(kv)
+		objectType := commonpb.ObjectType_Collection.String()
+		insertPrivilege := commonpb.ObjectPrivilege_PrivilegeInsert.String()
+		deletedRole := "legacy_role_delete_victim"
+		untouchedRole := "legacy_role_delete_donor"
+		objectName := "legacy_role_delete_collection"
+		deletedKey := fmt.Sprintf("%s/%s/%s/%s", GranteePrefix, deletedRole, objectType, funcutil.CombineObjectName(util.DefaultDBName, objectName))
+		untouchedKey := fmt.Sprintf("%s/%s/%s/%s", GranteePrefix, untouchedRole, objectType, funcutil.CombineObjectName(util.DefaultDBName, objectName))
+		sharedLegacyID := crypto.MD5(untouchedKey)
+		require.NoError(t, kv.Save(ctx, deletedKey, sharedLegacyID))
+		require.NoError(t, kv.Save(ctx, untouchedKey, sharedLegacyID))
+		legacyInsertKey := fmt.Sprintf("%s/%s/%s", GranteeIDPrefix, sharedLegacyID, insertPrivilege)
+		require.NoError(t, kv.Save(ctx, legacyInsertKey, util.UserRoot))
+
+		err := c.DeleteGrant(ctx, util.DefaultTenant, &milvuspb.RoleEntity{Name: deletedRole})
+		require.NoError(t, err)
+
+		requireGrantPrivileges(t, c, untouchedRole, objectName, "Insert")
+		_, err = kv.Load(ctx, legacyInsertKey)
+		require.NoError(t, err)
 	})
 }
 
@@ -3753,8 +4004,8 @@ func TestMigrateGrantCollectionName(t *testing.T) {
 			"role1", "Collection", funcutil.CombineObjectName("default", "new_col"))
 		newKey2 := fmt.Sprintf("%s/%s/%s/%s", GranteePrefix,
 			"role2", "Collection", funcutil.CombineObjectName("default", "new_col"))
-		newIdStr1 := crypto.MD5(newKey1)
-		newIdStr2 := crypto.MD5(newKey2)
+		newIdStr1 := crypto.GranteeID(newKey1)
+		newIdStr2 := crypto.GranteeID(newKey2)
 
 		// Mock loading GranteeIDPrefix entries for each old idStr
 		oldGranteeIDKey1 := funcutil.HandleTenantForEtcdPrefix(GranteeIDPrefix, tenant, "gid1")
@@ -3778,7 +4029,66 @@ func TestMigrateGrantCollectionName(t *testing.T) {
 				newKey2:   newIdStr2,
 				newIDKey1: "root", newIDKey2a: "root", newIDKey2b: "admin",
 			},
-			[]string{key1, oldIDEntry1, key2, oldIDEntry2a, oldIDEntry2b}).Return(nil)
+			[]string{key1, key2, oldIDEntry1, oldIDEntry2a, oldIDEntry2b}).Return(nil)
+
+		err := c.MigrateGrantCollectionName(ctx, tenant, "default", "old_col", "default", "new_col")
+		assert.NoError(t, err)
+	})
+
+	t.Run("handles rootPath prefix in migrated grantee id keys", func(t *testing.T) {
+		kvmock := mocks.NewTxnKV(t)
+		c := NewCatalog(kvmock)
+		granteeKey := funcutil.HandleTenantForEtcdPrefix(GranteePrefix, tenant)
+		rootPath := "by-dev/meta/"
+
+		key1 := rootPath + granteeKey + "role1/Collection/default.old_col"
+		kvmock.EXPECT().LoadWithPrefix(mock.Anything, granteeKey).Return(
+			[]string{key1}, []string{"gid1"}, nil)
+
+		newKey1 := fmt.Sprintf("%s/%s/%s/%s", GranteePrefix,
+			"role1", "Collection", funcutil.CombineObjectName("default", "new_col"))
+		newIdStr1 := crypto.GranteeID(newKey1)
+
+		oldGranteeIDKey1 := funcutil.HandleTenantForEtcdPrefix(GranteeIDPrefix, tenant, "gid1")
+		oldIDEntry1 := rootPath + oldGranteeIDKey1 + "Insert"
+		kvmock.EXPECT().LoadWithPrefix(mock.Anything, oldGranteeIDKey1).Return(
+			[]string{oldIDEntry1}, []string{"root"}, nil)
+
+		newIDKey1 := fmt.Sprintf("%s/%s/%s", GranteeIDPrefix, newIdStr1, "Insert")
+		oldKey1 := fmt.Sprintf("%s/%s/%s/%s", GranteePrefix, "role1", "Collection", "default.old_col")
+		oldIDKey1 := fmt.Sprintf("%s/%s/%s", GranteeIDPrefix, "gid1", "Insert")
+		kvmock.EXPECT().MultiSaveAndRemove(mock.Anything,
+			map[string]string{newKey1: newIdStr1, newIDKey1: "root"},
+			[]string{oldKey1, oldIDKey1}).Return(nil)
+
+		err := c.MigrateGrantCollectionName(ctx, tenant, "default", "old_col", "default", "new_col")
+		assert.NoError(t, err)
+	})
+
+	t.Run("keeps old id entries when same id migration load fails", func(t *testing.T) {
+		kvmock := mocks.NewTxnKV(t)
+		c := NewCatalog(kvmock)
+		granteeKey := funcutil.HandleTenantForEtcdPrefix(GranteePrefix, tenant)
+
+		key1 := granteeKey + "role1/Collection/default.old_col"
+		key2 := granteeKey + "role2/Collection/default.old_col"
+		kvmock.EXPECT().LoadWithPrefix(mock.Anything, granteeKey).Return(
+			[]string{key1, key2}, []string{"gid1", "gid1"}, nil)
+
+		oldGranteeIDKey1 := funcutil.HandleTenantForEtcdPrefix(GranteeIDPrefix, tenant, "gid1")
+		kvmock.EXPECT().LoadWithPrefix(mock.Anything, oldGranteeIDKey1).Return(
+			nil, nil, errors.New("load child error")).Once()
+		oldIDEntry1 := oldGranteeIDKey1 + "Insert"
+		kvmock.EXPECT().LoadWithPrefix(mock.Anything, oldGranteeIDKey1).Return(
+			[]string{oldIDEntry1}, []string{"root"}, nil).Once()
+
+		newKey2 := fmt.Sprintf("%s/%s/%s/%s", GranteePrefix,
+			"role2", "Collection", funcutil.CombineObjectName("default", "new_col"))
+		newIdStr2 := crypto.GranteeID(newKey2)
+		newIDKey2 := fmt.Sprintf("%s/%s/%s", GranteeIDPrefix, newIdStr2, "Insert")
+		kvmock.EXPECT().MultiSaveAndRemove(mock.Anything,
+			map[string]string{newKey2: newIdStr2, newIDKey2: "root"},
+			[]string{key2}).Return(nil)
 
 		err := c.MigrateGrantCollectionName(ctx, tenant, "default", "old_col", "default", "new_col")
 		assert.NoError(t, err)
@@ -3795,7 +4105,7 @@ func TestMigrateGrantCollectionName(t *testing.T) {
 
 		newKey1 := fmt.Sprintf("%s/%s/%s/%s", GranteePrefix,
 			"role1", "Collection", funcutil.CombineObjectName("db2", "col2"))
-		newIdStr1 := crypto.MD5(newKey1)
+		newIdStr1 := crypto.GranteeID(newKey1)
 
 		// Mock loading GranteeIDPrefix entries for old idStr
 		oldGranteeIDKey1 := funcutil.HandleTenantForEtcdPrefix(GranteeIDPrefix, tenant, "gid1")
@@ -3829,7 +4139,7 @@ func TestMigrateGrantCollectionName(t *testing.T) {
 
 		newKey2 := fmt.Sprintf("%s/%s/%s/%s", GranteePrefix,
 			"role1", "Collection", funcutil.CombineObjectName("default", "new_col"))
-		newIdStr2 := crypto.MD5(newKey2)
+		newIdStr2 := crypto.GranteeID(newKey2)
 
 		kvmock.EXPECT().MultiSaveAndRemove(mock.Anything,
 			map[string]string{newKey2: newIdStr2},

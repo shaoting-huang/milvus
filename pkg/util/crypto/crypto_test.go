@@ -1,9 +1,11 @@
 package crypto
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -44,4 +46,21 @@ func TestBcryptCost(t *testing.T) {
 
 func TestMD5(t *testing.T) {
 	assert.Equal(t, "67f48520697662a2", MD5("These pretzels are making me thirsty."))
+}
+
+func TestGranteeID(t *testing.T) {
+	id := GranteeID("These pretzels are making me thirsty.")
+	assert.Equal(t, "b0804ec967f48520697662a204f5fe72", id)
+	assert.Len(t, id, 32)
+}
+
+func TestGranteeIDUniqueness(t *testing.T) {
+	seen := make(map[string]struct{})
+	for i := 0; i < 4096; i++ {
+		key := fmt.Sprintf("root-coord/credential/grantee-privileges/role-%04d/Collection/default.collection-%04d", i, i)
+		id := GranteeID(key)
+		require.Len(t, id, 32)
+		require.NotContains(t, seen, id)
+		seen[id] = struct{}{}
+	}
 }
