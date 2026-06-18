@@ -1,0 +1,96 @@
+syntax = "proto3";
+
+package milvus.proto.catalog;
+
+option go_package = "github.com/milvus-io/milvus/pkg/v3/proto/catalogpb";
+
+import "common.proto";
+import "messages.proto";
+
+// ---- Alias group ----
+//
+// AlterAlias / DropAlias are broadcast-driven meta applies: the request carries the
+// messagespb header (the body is empty for both) plus the control-channel time tick.
+// The server rebuilds the BroadcastResult in memory (never re-broadcasting) before
+// calling the unchanged meta method. The Check* methods carry their plain string args.
+
+// AlterAlias rebuilds BroadcastResultAlterAliasMessageV2 from header + time_tick.
+message AlterAliasRequest {
+  .milvus.proto.messages.AlterAliasMessageHeader header = 1;
+  uint64 time_tick = 2;
+}
+message AlterAliasResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+// DropAlias rebuilds BroadcastResultDropAliasMessageV2 from header + time_tick.
+message DropAliasRequest {
+  .milvus.proto.messages.DropAliasMessageHeader header = 1;
+  uint64 time_tick = 2;
+}
+message DropAliasResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+message DescribeAliasRequest {
+  string db_name = 1;
+  string alias = 2;
+  uint64 ts = 3;
+}
+message DescribeAliasResponse {
+  .milvus.proto.common.Status status = 1;
+  string collection_name = 2;
+}
+
+message ListAliasesRequest {
+  string db_name = 1;
+  string collection_name = 2;
+  uint64 ts = 3;
+}
+message ListAliasesResponse {
+  .milvus.proto.common.Status status = 1;
+  repeated string aliases = 2;
+}
+
+message IsAliasRequest {
+  string db_name = 1;
+  string name = 2;
+}
+message IsAliasResponse {
+  .milvus.proto.common.Status status = 1;
+  bool is_alias = 2;
+}
+
+message ListAliasesByIDRequest {
+  int64 coll_id = 1;
+}
+message ListAliasesByIDResponse {
+  .milvus.proto.common.Status status = 1;
+  repeated string aliases = 2;
+}
+
+message CheckIfAliasCreatableRequest {
+  string db_name = 1;
+  string alias = 2;
+  string collection_name = 3;
+}
+message CheckIfAliasCreatableResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+message CheckIfAliasAlterableRequest {
+  string db_name = 1;
+  string alias = 2;
+  string collection_name = 3;
+}
+message CheckIfAliasAlterableResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+message CheckIfAliasDroppableRequest {
+  string db_name = 1;
+  string alias = 2;
+}
+message CheckIfAliasDroppableResponse {
+  .milvus.proto.common.Status status = 1;
+}

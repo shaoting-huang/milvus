@@ -1,0 +1,158 @@
+syntax = "proto3";
+
+package milvus.proto.catalog;
+
+option go_package = "github.com/milvus-io/milvus/pkg/v3/proto/catalogpb";
+
+import "common.proto";
+import "etcd_meta.proto";
+import "catalog_collection.proto";
+import "catalog_partition.proto";
+import "catalog_alias.proto";
+import "catalog_credential.proto";
+import "catalog_role.proto";
+import "catalog_grant.proto";
+import "catalog_privilegegroup.proto";
+import "catalog_dbchecks.proto";
+import "catalog_fileresource.proto";
+
+// CatalogService exposes RootCoord's IMetaTable surface as a standalone service: the
+// real ddLock + in-memory maps + RootCoordCatalog persistence live in the service
+// process; coord runs a thin client (remoteMetaTable) with zero metadata cache.
+//
+// Messages reuse the existing typed protos (etcd.DatabaseInfo, etc.) — no marshaled-byte
+// payloads. Every response carries a common.Status so merr error codes propagate
+// faithfully across the wire (client reconstructs via merr.Error). Generated with the
+// standard milvus proto pipeline.
+service CatalogService {
+  // ---- Database DDL ----
+  rpc CreateDatabase(CreateDatabaseRequest) returns (CreateDatabaseResponse);
+  rpc DropDatabase(DropDatabaseRequest) returns (DropDatabaseResponse);
+  rpc AlterDatabase(AlterDatabaseRequest) returns (AlterDatabaseResponse);
+  rpc ListDatabases(ListDatabasesRequest) returns (ListDatabasesResponse);
+  rpc GetDatabaseByName(GetDatabaseByNameRequest) returns (GetDatabaseResponse);
+  rpc GetDatabaseByID(GetDatabaseByIDRequest) returns (GetDatabaseResponse);
+
+  // ---- Collection ----
+  rpc AddCollection(AddCollectionRequest) returns (AddCollectionResponse);
+  rpc DropCollection(DropCollectionRequest) returns (DropCollectionResponse);
+  rpc RemoveCollection(RemoveCollectionRequest) returns (RemoveCollectionResponse);
+  rpc GetCollectionID(GetCollectionIDRequest) returns (GetCollectionIDResponse);
+  rpc GetCollectionByName(GetCollectionByNameRequest) returns (GetCollectionByNameResponse);
+  rpc GetCollectionByID(GetCollectionByIDRequest) returns (GetCollectionByIDResponse);
+  rpc GetCollectionByIDWithMaxTs(GetCollectionByIDWithMaxTsRequest) returns (GetCollectionByIDWithMaxTsResponse);
+  rpc ListCollections(ListCollectionsRequest) returns (ListCollectionsResponse);
+  rpc ListAllAvailCollections(ListAllAvailCollectionsRequest) returns (ListAllAvailCollectionsResponse);
+  rpc ListAllAvailPartitions(ListAllAvailPartitionsRequest) returns (ListAllAvailPartitionsResponse);
+  rpc ListCollectionPhysicalChannels(ListCollectionPhysicalChannelsRequest) returns (ListCollectionPhysicalChannelsResponse);
+  rpc GetCollectionVirtualChannels(GetCollectionVirtualChannelsRequest) returns (GetCollectionVirtualChannelsResponse);
+  rpc GetPChannelInfo(GetPChannelInfoRequest) returns (GetPChannelInfoResponse);
+  rpc CheckIfCollectionRenamable(CheckIfCollectionRenamableRequest) returns (CheckIfCollectionRenamableResponse);
+  rpc BeginTruncateCollection(BeginTruncateCollectionRequest) returns (BeginTruncateCollectionResponse);
+  rpc GetGeneralCount(GetGeneralCountRequest) returns (GetGeneralCountResponse);
+  rpc AlterCollection(AlterCollectionRequest) returns (AlterCollectionResponse);
+  rpc TruncateCollection(TruncateCollectionRequest) returns (TruncateCollectionResponse);
+  rpc AddPartition(AddPartitionRequest) returns (AddPartitionResponse);
+  rpc GetPartitionIDByName(GetPartitionIDByNameRequest) returns (GetPartitionIDByNameResponse);
+  rpc DropPartition(DropPartitionRequest) returns (DropPartitionResponse);
+  rpc RemovePartition(RemovePartitionRequest) returns (RemovePartitionResponse);
+  rpc AlterAlias(AlterAliasRequest) returns (AlterAliasResponse);
+  rpc DropAlias(DropAliasRequest) returns (DropAliasResponse);
+  rpc DescribeAlias(DescribeAliasRequest) returns (DescribeAliasResponse);
+  rpc ListAliases(ListAliasesRequest) returns (ListAliasesResponse);
+  rpc IsAlias(IsAliasRequest) returns (IsAliasResponse);
+  rpc ListAliasesByID(ListAliasesByIDRequest) returns (ListAliasesByIDResponse);
+  rpc CheckIfAliasCreatable(CheckIfAliasCreatableRequest) returns (CheckIfAliasCreatableResponse);
+  rpc CheckIfAliasAlterable(CheckIfAliasAlterableRequest) returns (CheckIfAliasAlterableResponse);
+  rpc CheckIfAliasDroppable(CheckIfAliasDroppableRequest) returns (CheckIfAliasDroppableResponse);
+  // ---- Credential group ----
+  rpc InitCredential(InitCredentialRequest) returns (InitCredentialResponse);
+  rpc AlterCredential(AlterCredentialRequest) returns (AlterCredentialResponse);
+  rpc DeleteCredential(DeleteCredentialRequest) returns (DeleteCredentialResponse);
+  rpc GetCredential(GetCredentialRequest) returns (GetCredentialResponse);
+  rpc ListCredentialUsernames(ListCredentialUsernamesRequest) returns (ListCredentialUsernamesResponse);
+  rpc CheckIfAddCredential(CheckIfAddCredentialRequest) returns (CheckIfAddCredentialResponse);
+  rpc CheckIfUpdateCredential(CheckIfUpdateCredentialRequest) returns (CheckIfUpdateCredentialResponse);
+  rpc CheckIfDeleteCredential(CheckIfDeleteCredentialRequest) returns (CheckIfDeleteCredentialResponse);
+  rpc CreateRole(CreateRoleRequest) returns (CreateRoleResponse);
+  rpc AlterRole(AlterRoleRequest) returns (AlterRoleResponse);
+  rpc DropRole(DropRoleRequest) returns (DropRoleResponse);
+  rpc OperateUserRole(OperateUserRoleRequest) returns (OperateUserRoleResponse);
+  rpc SelectRole(SelectRoleRequest) returns (SelectRoleResponse);
+  rpc SelectUser(SelectUserRequest) returns (SelectUserResponse);
+  rpc ListUserRole(ListUserRoleRequest) returns (ListUserRoleResponse);
+  rpc CheckIfCreateRole(CheckIfCreateRoleRequest) returns (CheckIfCreateRoleResponse);
+  rpc CheckIfAlterRole(CheckIfAlterRoleRequest) returns (CheckIfAlterRoleResponse);
+  rpc CheckIfDropRole(CheckIfDropRoleRequest) returns (CheckIfDropRoleResponse);
+  rpc CheckIfOperateUserRole(CheckIfOperateUserRoleRequest) returns (CheckIfOperateUserRoleResponse);
+  rpc OperatePrivilege(OperatePrivilegeRequest) returns (OperatePrivilegeResponse);
+  rpc DropGrant(DropGrantRequest) returns (DropGrantResponse);
+  rpc RestoreRBAC(RestoreRBACRequest) returns (RestoreRBACResponse);
+  rpc SelectGrant(SelectGrantRequest) returns (SelectGrantResponse);
+  rpc ListPolicy(ListPolicyRequest) returns (ListPolicyResponse);
+  rpc BackupRBAC(BackupRBACRequest) returns (BackupRBACResponse);
+  rpc CheckIfRBACRestorable(CheckIfRBACRestorableRequest) returns (CheckIfRBACRestorableResponse);
+  rpc CreatePrivilegeGroup(CreatePrivilegeGroupRequest) returns (CreatePrivilegeGroupResponse);
+  rpc DropPrivilegeGroup(DropPrivilegeGroupRequest) returns (DropPrivilegeGroupResponse);
+  rpc OperatePrivilegeGroup(OperatePrivilegeGroupRequest) returns (OperatePrivilegeGroupResponse);
+  rpc IsCustomPrivilegeGroup(IsCustomPrivilegeGroupRequest) returns (IsCustomPrivilegeGroupResponse);
+  rpc ListPrivilegeGroups(ListPrivilegeGroupsRequest) returns (ListPrivilegeGroupsResponse);
+  rpc GetPrivilegeGroupRoles(GetPrivilegeGroupRolesRequest) returns (GetPrivilegeGroupRolesResponse);
+  rpc CheckIfPrivilegeGroupCreatable(CheckIfPrivilegeGroupCreatableRequest) returns (CheckIfPrivilegeGroupCreatableResponse);
+  rpc CheckIfPrivilegeGroupAlterable(CheckIfPrivilegeGroupAlterableRequest) returns (CheckIfPrivilegeGroupAlterableResponse);
+  rpc CheckIfPrivilegeGroupDropable(CheckIfPrivilegeGroupDropableRequest) returns (CheckIfPrivilegeGroupDropableResponse);
+  rpc CheckIfDatabaseCreatable(CheckIfDatabaseCreatableRequest) returns (CheckIfDatabaseCreatableResponse);
+  rpc CheckIfDatabaseDroppable(CheckIfDatabaseDroppableRequest) returns (CheckIfDatabaseDroppableResponse);
+  // ---- FileResource ----
+  rpc AddFileResource(AddFileResourceRequest) returns (AddFileResourceResponse);
+  rpc RemoveFileResource(RemoveFileResourceRequest) returns (RemoveFileResourceResponse);
+  rpc ListFileResource(ListFileResourceRequest) returns (ListFileResourceResponse);
+  rpc IncFileResourceRefCnt(IncFileResourceRefCntRequest) returns (IncFileResourceRefCntResponse);
+  rpc DecFileResourceRefCnt(DecFileResourceRefCntRequest) returns (DecFileResourceRefCntResponse);
+  rpc RecoverFileResourceRefCnt(RecoverFileResourceRefCntRequest) returns (RecoverFileResourceRefCntResponse);
+}
+
+message CreateDatabaseRequest {
+  .milvus.proto.etcd.DatabaseInfo db = 1;
+  uint64 ts = 2;
+}
+message CreateDatabaseResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+message DropDatabaseRequest {
+  string db_name = 1;
+  uint64 ts = 2;
+}
+message DropDatabaseResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+message AlterDatabaseRequest {
+  .milvus.proto.etcd.DatabaseInfo db = 1;
+  uint64 ts = 2;
+}
+message AlterDatabaseResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+message ListDatabasesRequest {
+  uint64 ts = 1;
+}
+message ListDatabasesResponse {
+  .milvus.proto.common.Status status = 1;
+  repeated .milvus.proto.etcd.DatabaseInfo dbs = 2;
+}
+
+message GetDatabaseByNameRequest {
+  string db_name = 1;
+  uint64 ts = 2;
+}
+message GetDatabaseByIDRequest {
+  int64 db_id = 1;
+  uint64 ts = 2;
+}
+message GetDatabaseResponse {
+  .milvus.proto.common.Status status = 1;
+  .milvus.proto.etcd.DatabaseInfo db = 2;
+}

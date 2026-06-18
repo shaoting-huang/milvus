@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package milvus.proto.catalog;
+
+option go_package = "github.com/milvus-io/milvus/pkg/v3/proto/catalogpb";
+
+import "common.proto";
+import "internal.proto";
+
+// FileResource group messages. The in-memory refCnt lives in the service MetaTable
+// (atomic with RemoveFileResource under ddLock), so the ref-count methods are remoted
+// too even though some have no ctx / no error in the IMetaTable signature.
+
+message FileResourceInt64List {
+  repeated int64 ids = 1;
+}
+
+message AddFileResourceRequest {
+  .milvus.proto.internal.FileResourceInfo resource = 1;
+}
+message AddFileResourceResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+message RemoveFileResourceRequest {
+  string name = 1;
+}
+message RemoveFileResourceResponse {
+  .milvus.proto.common.Status status = 1;
+  bool removed = 2;
+}
+
+message ListFileResourceRequest {}
+message ListFileResourceResponse {
+  .milvus.proto.common.Status status = 1;
+  repeated .milvus.proto.internal.FileResourceInfo resources = 2;
+  uint64 version = 3;
+}
+
+message IncFileResourceRefCntRequest {
+  repeated int64 ids = 1;
+}
+message IncFileResourceRefCntResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+message DecFileResourceRefCntRequest {
+  repeated int64 ids = 1;
+}
+message DecFileResourceRefCntResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+message RecoverFileResourceRefCntRequest {
+  map<int64, FileResourceInt64List> pending_collections = 1;
+}
+message RecoverFileResourceRefCntResponse {
+  .milvus.proto.common.Status status = 1;
+}

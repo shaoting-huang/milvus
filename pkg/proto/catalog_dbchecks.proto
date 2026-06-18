@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package milvus.proto.catalog;
+
+option go_package = "github.com/milvus-io/milvus/pkg/v3/proto/catalogpb";
+
+import "common.proto";
+import "milvus.proto";
+
+// ---- Database precondition checks (dbchecks group) ----
+//
+// These read-only IMetaTable methods validate, under ddLock.RLock, whether a database
+// may be created or dropped. They take the original milvuspb request verbatim (carried
+// as a typed proto, not marshaled bytes) and return only a status; the answer rides in
+// common.Status (merr.Error reconstructs the original error code on the client).
+
+message CheckIfDatabaseCreatableRequest {
+  .milvus.proto.milvus.CreateDatabaseRequest req = 1;
+}
+message CheckIfDatabaseCreatableResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+message CheckIfDatabaseDroppableRequest {
+  .milvus.proto.milvus.DropDatabaseRequest req = 1;
+}
+message CheckIfDatabaseDroppableResponse {
+  .milvus.proto.common.Status status = 1;
+}

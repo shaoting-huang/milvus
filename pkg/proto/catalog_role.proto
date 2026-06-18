@@ -1,0 +1,115 @@
+syntax = "proto3";
+
+package milvus.proto.catalog;
+
+option go_package = "github.com/milvus-io/milvus/pkg/v3/proto/catalogpb";
+
+import "common.proto";
+import "milvus.proto";
+
+// ---- Role / User-Role DCL (role group) ----
+//
+// All role/user entities and the Check* request args are carried directly as the
+// existing milvus.proto.milvus (milvuspb) types — no marshaled bytes. Every response's
+// first field is a common.Status so merr error codes propagate across the wire.
+
+// CreateRole
+message CreateRoleRequest {
+  string tenant = 1;
+  .milvus.proto.milvus.RoleEntity entity = 2;
+}
+message CreateRoleResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+// AlterRole
+message AlterRoleRequest {
+  string tenant = 1;
+  .milvus.proto.milvus.RoleEntity entity = 2;
+}
+message AlterRoleResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+// DropRole
+message DropRoleRequest {
+  string tenant = 1;
+  string role_name = 2;
+}
+message DropRoleResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+// OperateUserRole
+message OperateUserRoleRequest {
+  string tenant = 1;
+  .milvus.proto.milvus.UserEntity user_entity = 2;
+  .milvus.proto.milvus.RoleEntity role_entity = 3;
+  .milvus.proto.milvus.OperateUserRoleType operate_type = 4;
+}
+message OperateUserRoleResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+// SelectRole
+message SelectRoleRequest {
+  string tenant = 1;
+  .milvus.proto.milvus.RoleEntity entity = 2;
+  bool include_user_info = 3;
+}
+message SelectRoleResponse {
+  .milvus.proto.common.Status status = 1;
+  repeated .milvus.proto.milvus.RoleResult results = 2;
+}
+
+// SelectUser
+message SelectUserRequest {
+  string tenant = 1;
+  .milvus.proto.milvus.UserEntity entity = 2;
+  bool include_role_info = 3;
+}
+message SelectUserResponse {
+  .milvus.proto.common.Status status = 1;
+  repeated .milvus.proto.milvus.UserResult results = 2;
+}
+
+// ListUserRole
+message ListUserRoleRequest {
+  string tenant = 1;
+}
+message ListUserRoleResponse {
+  .milvus.proto.common.Status status = 1;
+  repeated string user_roles = 2;
+}
+
+// CheckIfCreateRole — carries the original milvuspb request.
+message CheckIfCreateRoleRequest {
+  .milvus.proto.milvus.CreateRoleRequest req = 1;
+}
+message CheckIfCreateRoleResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+// CheckIfAlterRole
+message CheckIfAlterRoleRequest {
+  .milvus.proto.milvus.AlterRoleRequest req = 1;
+}
+message CheckIfAlterRoleResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+// CheckIfDropRole
+message CheckIfDropRoleRequest {
+  .milvus.proto.milvus.DropRoleRequest req = 1;
+}
+message CheckIfDropRoleResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+// CheckIfOperateUserRole
+message CheckIfOperateUserRoleRequest {
+  .milvus.proto.milvus.OperateUserRoleRequest req = 1;
+}
+message CheckIfOperateUserRoleResponse {
+  .milvus.proto.common.Status status = 1;
+}

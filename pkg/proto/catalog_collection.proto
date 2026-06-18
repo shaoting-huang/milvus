@@ -1,0 +1,192 @@
+syntax = "proto3";
+
+package milvus.proto.catalog;
+
+option go_package = "github.com/milvus-io/milvus/pkg/v3/proto/catalogpb";
+
+import "common.proto";
+import "etcd_meta.proto";
+import "messages.proto";
+import "root_coord.proto";
+
+// ---- Collection group ----
+//
+// Messages for the collection slice of RootCoord's IMetaTable. Collection/Partition/Alias
+// payloads reuse the existing typed etcd protos (no marshaled bytes). Broadcast methods
+// (AlterCollection, TruncateCollection) carry the messagespb Header plus the time ticks the
+// meta apply needs; the server rebuilds the BroadcastResult in memory (never broadcasts).
+
+message AddCollectionRequest {
+  .milvus.proto.etcd.CollectionInfo collection = 1;
+}
+message AddCollectionResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+message DropCollectionRequest {
+  int64 collection_id = 1;
+  uint64 ts = 2;
+}
+message DropCollectionResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+message RemoveCollectionRequest {
+  int64 collection_id = 1;
+  uint64 ts = 2;
+}
+message RemoveCollectionResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+message GetCollectionIDRequest {
+  string db_name = 1;
+  string collection_name = 2;
+}
+message GetCollectionIDResponse {
+  .milvus.proto.common.Status status = 1;
+  int64 collection_id = 2;
+}
+
+message GetCollectionByNameRequest {
+  string db_name = 1;
+  string collection_name = 2;
+  uint64 ts = 3;
+  bool allow_unavailable = 4;
+}
+message GetCollectionByNameResponse {
+  .milvus.proto.common.Status status = 1;
+  .milvus.proto.etcd.CollectionInfo collection = 2;
+}
+
+message GetCollectionByIDRequest {
+  string db_name = 1;
+  int64 collection_id = 2;
+  uint64 ts = 3;
+  bool allow_unavailable = 4;
+}
+message GetCollectionByIDResponse {
+  .milvus.proto.common.Status status = 1;
+  .milvus.proto.etcd.CollectionInfo collection = 2;
+}
+
+message GetCollectionByIDWithMaxTsRequest {
+  int64 collection_id = 1;
+}
+message GetCollectionByIDWithMaxTsResponse {
+  .milvus.proto.common.Status status = 1;
+  .milvus.proto.etcd.CollectionInfo collection = 2;
+}
+
+message ListCollectionsRequest {
+  string db_name = 1;
+  uint64 ts = 2;
+  bool only_avail = 3;
+}
+message ListCollectionsResponse {
+  .milvus.proto.common.Status status = 1;
+  repeated .milvus.proto.etcd.CollectionInfo collections = 2;
+}
+
+// int64 list (collection ids) reused for the map values below.
+message CollectionInt64List {
+  repeated int64 data = 1;
+}
+
+message ListAllAvailCollectionsRequest {
+}
+message ListAllAvailCollectionsResponse {
+  .milvus.proto.common.Status status = 1;
+  // dbID -> []collectionID
+  map<int64, CollectionInt64List> collections = 2;
+}
+
+// dbID -> (collectionID -> []partitionID)
+message CollectionPartitionMap {
+  // collectionID -> []partitionID
+  map<int64, CollectionInt64List> partitions = 1;
+}
+
+message ListAllAvailPartitionsRequest {
+}
+message ListAllAvailPartitionsResponse {
+  .milvus.proto.common.Status status = 1;
+  // dbID -> (collectionID -> []partitionID)
+  map<int64, CollectionPartitionMap> db_partitions = 2;
+}
+
+// string list (channel names) reused for the map values below.
+message CollectionStringList {
+  repeated string data = 1;
+}
+
+message ListCollectionPhysicalChannelsRequest {
+}
+message ListCollectionPhysicalChannelsResponse {
+  .milvus.proto.common.Status status = 1;
+  // collectionID -> []physicalChannel
+  map<int64, CollectionStringList> channels = 2;
+}
+
+message GetCollectionVirtualChannelsRequest {
+  int64 collection_id = 1;
+}
+message GetCollectionVirtualChannelsResponse {
+  .milvus.proto.common.Status status = 1;
+  repeated string virtual_channels = 2;
+}
+
+message GetPChannelInfoRequest {
+  string pchannel = 1;
+}
+message GetPChannelInfoResponse {
+  .milvus.proto.common.Status status = 1;
+  // the full rootcoord response is itself a proto; carry it directly.
+  .milvus.proto.rootcoord.GetPChannelInfoResponse info = 2;
+}
+
+message CheckIfCollectionRenamableRequest {
+  string db_name = 1;
+  string old_name = 2;
+  string new_db_name = 3;
+  string new_name = 4;
+}
+message CheckIfCollectionRenamableResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+message BeginTruncateCollectionRequest {
+  int64 collection_id = 1;
+}
+message BeginTruncateCollectionResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+message GetGeneralCountRequest {
+}
+message GetGeneralCountResponse {
+  .milvus.proto.common.Status status = 1;
+  int64 count = 2;
+}
+
+// AlterCollection [B]: meta apply reads header, body and result.GetMaxTimeTick().
+message AlterCollectionRequest {
+  .milvus.proto.messages.AlterCollectionMessageHeader header = 1;
+  .milvus.proto.messages.AlterCollectionMessageBody body = 2;
+  // the max time tick of the broadcast result (control-channel tick).
+  uint64 time_tick = 3;
+}
+message AlterCollectionResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+// TruncateCollection [B]: meta apply reads header and the per-vchannel TimeTick
+// (result.Results[vchannel].TimeTick) for every vchannel in the collection's ShardInfos.
+message TruncateCollectionRequest {
+  .milvus.proto.messages.TruncateCollectionMessageHeader header = 1;
+  // vchannel -> time tick, rebuilt into the BroadcastResult.Results map on the server.
+  map<string, uint64> vchannel_time_ticks = 2;
+}
+message TruncateCollectionResponse {
+  .milvus.proto.common.Status status = 1;
+}

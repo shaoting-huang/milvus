@@ -1932,6 +1932,11 @@ type rootCoordConfig struct {
 	GracefulStopTimeout         ParamItem `refreshable:"true"`
 	UseLockScheduler            ParamItem `refreshable:"true"`
 	DefaultDBProperties         ParamItem `refreshable:"false"`
+
+	// Catalog-service PoC: when enabled, RootCoord routes the migrated meta DDL to an
+	// external catalog service over gRPC instead of mutating its in-process MetaTable.
+	CatalogServicePoCEnabled ParamItem `refreshable:"false"`
+	CatalogServicePoCAddress ParamItem `refreshable:"false"`
 }
 
 func (p *rootCoordConfig) init(base *BaseTable) {
@@ -1943,6 +1948,24 @@ func (p *rootCoordConfig) init(base *BaseTable) {
 		Export:       true,
 	}
 	p.DmlChannelNum.Init(base.mgr)
+
+	p.CatalogServicePoCEnabled = ParamItem{
+		Key:          "rootCoord.catalogService.enabled",
+		Version:      "2.6.0",
+		DefaultValue: "false",
+		Doc:          "PoC: route RootCoord migrated meta DDL to an external catalog service over gRPC.",
+		Export:       false,
+	}
+	p.CatalogServicePoCEnabled.Init(base.mgr)
+
+	p.CatalogServicePoCAddress = ParamItem{
+		Key:          "rootCoord.catalogService.address",
+		Version:      "2.6.0",
+		DefaultValue: "",
+		Doc:          "PoC: address (host:port) of the external catalog service.",
+		Export:       false,
+	}
+	p.CatalogServicePoCAddress.Init(base.mgr)
 
 	p.MaxPartitionNum = ParamItem{
 		Key:          "rootCoord.maxPartitionNum",

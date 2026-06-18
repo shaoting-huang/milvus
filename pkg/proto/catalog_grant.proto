@@ -1,0 +1,70 @@
+syntax = "proto3";
+
+package milvus.proto.catalog;
+
+option go_package = "github.com/milvus-io/milvus/pkg/v3/proto/catalogpb";
+
+import "common.proto";
+import "milvus.proto";
+
+// ---- grant group ----
+// All requests/responses reuse the typed milvuspb (milvus.proto) RBAC entities directly —
+// GrantEntity / RoleEntity / RBACMeta / RestoreRBACMetaRequest — never marshaled bytes.
+// Every Response's first field is a common.Status so merr codes propagate.
+
+message OperatePrivilegeRequest {
+  string tenant = 1;
+  .milvus.proto.milvus.GrantEntity entity = 2;
+  .milvus.proto.milvus.OperatePrivilegeType operate_type = 3;
+}
+message OperatePrivilegeResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+message DropGrantRequest {
+  string tenant = 1;
+  .milvus.proto.milvus.RoleEntity role = 2;
+}
+message DropGrantResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+message RestoreRBACRequest {
+  string tenant = 1;
+  .milvus.proto.milvus.RBACMeta meta = 2;
+}
+message RestoreRBACResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+message SelectGrantRequest {
+  string tenant = 1;
+  .milvus.proto.milvus.GrantEntity entity = 2;
+}
+message SelectGrantResponse {
+  .milvus.proto.common.Status status = 1;
+  repeated .milvus.proto.milvus.GrantEntity entities = 2;
+}
+
+message ListPolicyRequest {
+  string tenant = 1;
+}
+message ListPolicyResponse {
+  .milvus.proto.common.Status status = 1;
+  repeated .milvus.proto.milvus.GrantEntity entities = 2;
+}
+
+message BackupRBACRequest {
+  string tenant = 1;
+}
+message BackupRBACResponse {
+  .milvus.proto.common.Status status = 1;
+  .milvus.proto.milvus.RBACMeta rbac_meta = 2;
+}
+
+message CheckIfRBACRestorableRequest {
+  .milvus.proto.milvus.RestoreRBACMetaRequest req = 1;
+}
+message CheckIfRBACRestorableResponse {
+  .milvus.proto.common.Status status = 1;
+}

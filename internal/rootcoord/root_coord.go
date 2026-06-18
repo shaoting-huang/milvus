@@ -32,6 +32,8 @@ import (
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
@@ -59,6 +61,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/kv"
 	"github.com/milvus-io/milvus/pkg/v3/log"
 	"github.com/milvus-io/milvus/pkg/v3/metrics"
+	"github.com/milvus-io/milvus/pkg/v3/proto/catalogpb"
 	pb "github.com/milvus-io/milvus/pkg/v3/proto/etcdpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/proxypb"
@@ -386,6 +389,23 @@ func (c *Core) initKVCreator() {
 }
 
 func (c *Core) initMetaTable(initCtx context.Context) error {
+	// Catalog-service PoC: when enabled, route the migrated meta methods to an external
+	// catalog service. The gRPC connection is created ONCE here (not inside the retry
+	// closure) so retries cannot leak connections.
+	var catalogServiceClient catalogpb.CatalogServiceClient
+	if Params.RootCoordCfg.CatalogServicePoCEnabled.GetAsBool() {
+		addr := Params.RootCoordCfg.CatalogServicePoCAddress.GetValue()
+		if addr == "" {
+			return retry.Unrecoverable(merr.WrapErrServiceInternalMsg("rootCoord.catalogService.address is not configured"))
+		}
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return err
+		}
+		catalogServiceClient = catalogpb.NewCatalogServiceClient(conn)
+		log.Ctx(initCtx).Info("RootCoord meta routed to external catalog service", zap.String("address", addr))
+	}
+
 	fn := func() error {
 		var catalog metastore.RootCoordCatalog
 		var err error
@@ -409,6 +429,12 @@ func (c *Core) initMetaTable(initCtx context.Context) error {
 
 		if c.meta, err = NewMetaTable(c.ctx, catalog, c.tsoAllocator); err != nil {
 			return err
+		}
+
+		// Wrap the local MetaTable as the fallback for not-yet-migrated methods while
+		// migrated methods go over gRPC.
+		if catalogServiceClient != nil {
+			c.meta = NewRemoteMetaTable(c.meta, catalogServiceClient)
 		}
 
 		return nil

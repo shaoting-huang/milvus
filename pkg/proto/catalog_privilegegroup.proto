@@ -1,0 +1,83 @@
+syntax = "proto3";
+
+package milvus.proto.catalog;
+
+option go_package = "github.com/milvus-io/milvus/pkg/v3/proto/catalogpb";
+
+import "common.proto";
+import "milvus.proto";
+
+// ---- Privilege Group DDL/DCL ----
+// Message definitions for the privilegegroup group of RootCoord's IMetaTable surface.
+// The service block (rpc entries) is assembled by the orchestrator.
+//
+// Privilege group entities reuse the existing milvuspb types directly (carried on the
+// wire, no marshaled bytes). Every response carries a common.Status so merr error codes
+// propagate faithfully across the wire (client reconstructs via merr.Error).
+
+message CreatePrivilegeGroupRequest {
+  string group_name = 1;
+}
+message CreatePrivilegeGroupResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+message DropPrivilegeGroupRequest {
+  string group_name = 1;
+}
+message DropPrivilegeGroupResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+message OperatePrivilegeGroupRequest {
+  string group_name = 1;
+  repeated .milvus.proto.milvus.PrivilegeEntity privileges = 2;
+  .milvus.proto.milvus.OperatePrivilegeGroupType operate_type = 3;
+}
+message OperatePrivilegeGroupResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+message IsCustomPrivilegeGroupRequest {
+  string group_name = 1;
+}
+message IsCustomPrivilegeGroupResponse {
+  .milvus.proto.common.Status status = 1;
+  bool is_custom = 2;
+}
+
+message ListPrivilegeGroupsRequest {
+}
+message ListPrivilegeGroupsResponse {
+  .milvus.proto.common.Status status = 1;
+  repeated .milvus.proto.milvus.PrivilegeGroupInfo privilege_groups = 2;
+}
+
+message GetPrivilegeGroupRolesRequest {
+  string group_name = 1;
+}
+message GetPrivilegeGroupRolesResponse {
+  .milvus.proto.common.Status status = 1;
+  repeated .milvus.proto.milvus.RoleEntity roles = 2;
+}
+
+message CheckIfPrivilegeGroupCreatableRequest {
+  .milvus.proto.milvus.CreatePrivilegeGroupRequest req = 1;
+}
+message CheckIfPrivilegeGroupCreatableResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+message CheckIfPrivilegeGroupAlterableRequest {
+  .milvus.proto.milvus.OperatePrivilegeGroupRequest req = 1;
+}
+message CheckIfPrivilegeGroupAlterableResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+message CheckIfPrivilegeGroupDropableRequest {
+  .milvus.proto.milvus.DropPrivilegeGroupRequest req = 1;
+}
+message CheckIfPrivilegeGroupDropableResponse {
+  .milvus.proto.common.Status status = 1;
+}

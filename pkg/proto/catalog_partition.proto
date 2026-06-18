@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package milvus.proto.catalog;
+
+option go_package = "github.com/milvus-io/milvus/pkg/v3/proto/catalogpb";
+
+import "common.proto";
+import "etcd_meta.proto";
+
+// ---- Partition DDL ----
+// Message definitions for the partition group of RootCoord's IMetaTable surface.
+// The service block (rpc entries) is assembled by the orchestrator.
+
+message AddPartitionRequest {
+  .milvus.proto.etcd.PartitionInfo partition = 1;
+}
+message AddPartitionResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+message GetPartitionIDByNameRequest {
+  int64 collection_id = 1;
+  string partition_name = 2;
+}
+message GetPartitionIDByNameResponse {
+  .milvus.proto.common.Status status = 1;
+  int64 partition_id = 2;
+  bool exists = 3;
+}
+
+message DropPartitionRequest {
+  int64 collection_id = 1;
+  int64 partition_id = 2;
+  uint64 ts = 3;
+}
+message DropPartitionResponse {
+  .milvus.proto.common.Status status = 1;
+}
+
+message RemovePartitionRequest {
+  int64 collection_id = 1;
+  int64 partition_id = 2;
+  uint64 ts = 3;
+}
+message RemovePartitionResponse {
+  .milvus.proto.common.Status status = 1;
+}
