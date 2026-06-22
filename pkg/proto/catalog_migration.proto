@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package milvus.proto.catalog;
+
+option go_package = "github.com/milvus-io/milvus/pkg/v3/proto/catalogpb";
+
+import "common.proto";
+
+// Migration RPCs let a milvus cluster's RootCoord move its existing metadata into the
+// pooled catalog service's backend WITHOUT the client ever touching TiKV directly: the
+// coord reads its own (source) etcd and ships the key/value snapshot here; the service
+// writes it into the namespace's TiKV and verifies it. The backend stays behind the service.
+
+message KvEntry {
+  string key = 1;   // logical key (no backend rootPath)
+  bytes value = 2;
+}
+
+message BulkImportRequest {
+  string namespace = 1;          // cluster-id; selects the destination TiKV prefix
+  repeated KvEntry entries = 2;
+}
+message BulkImportResponse {
+  milvus.proto.common.Status status = 1;
+  int64 imported = 2;
+}
+
+message VerifyMismatch {
+  string key = 1;
+  string reason = 2; // missing-in-dst | missing-in-src | value-differs
+}
+
+message VerifyImportRequest {
+  string namespace = 1;
+  repeated string roots = 2;     // prefixes that define the migrated keyspace in the dest
+  repeated KvEntry entries = 3;  // a fresh source snapshot to compare the dest against
+}
+message VerifyImportResponse {
+  milvus.proto.common.Status status = 1;
+  repeated VerifyMismatch mismatches = 2;
+}

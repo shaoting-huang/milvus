@@ -32,12 +32,11 @@ import (
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
 	"github.com/milvus-io/milvus/internal/allocator"
+	catalogclient "github.com/milvus-io/milvus/internal/catalogservice/client"
 	"github.com/milvus-io/milvus/internal/coordinator/snmanager"
 	etcdkv "github.com/milvus-io/milvus/internal/kv/etcd"
 	"github.com/milvus-io/milvus/internal/kv/tikv"
@@ -61,7 +60,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/kv"
 	"github.com/milvus-io/milvus/pkg/v3/log"
 	"github.com/milvus-io/milvus/pkg/v3/metrics"
-	"github.com/milvus-io/milvus/pkg/v3/proto/catalogpb"
 	pb "github.com/milvus-io/milvus/pkg/v3/proto/etcdpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/proxypb"
@@ -133,16 +131,22 @@ type metaKVCreator func() kv.MetaKv
 
 // Core root coordinator core
 type Core struct {
-	ctx              context.Context
-	cancel           context.CancelFunc
-	wg               sync.WaitGroup
-	etcdCli          *clientv3.Client
-	tikvCli          *txnkv.Client
-	address          string
-	meta             IMetaTable
-	scheduler        IScheduler
-	broker           Broker
-	ddlTsLockManager DdlTsLockManager
+	ctx     context.Context
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
+	etcdCli *clientv3.Client
+	tikvCli *txnkv.Client
+	address string
+	meta    IMetaTable
+
+	// catalog-service PoC: handles the converge watcher needs to migrate this cluster into
+	// the pooled catalog service and cut c.meta over at runtime.
+	catalogSwitchable *switchableMetaTable
+	catalogLocalMeta  IMetaTable
+	catalogSourceKV   kv.MetaKv
+	scheduler         IScheduler
+	broker            Broker
+	ddlTsLockManager  DdlTsLockManager
 
 	metaKVCreator metaKVCreator
 
@@ -389,26 +393,9 @@ func (c *Core) initKVCreator() {
 }
 
 func (c *Core) initMetaTable(initCtx context.Context) error {
-	// Catalog-service PoC: when enabled, route the migrated meta methods to an external
-	// catalog service. The gRPC connection is created ONCE here (not inside the retry
-	// closure) so retries cannot leak connections.
-	var catalogServiceClient catalogpb.CatalogServiceClient
-	if Params.RootCoordCfg.CatalogServicePoCEnabled.GetAsBool() {
-		addr := Params.RootCoordCfg.CatalogServicePoCAddress.GetValue()
-		if addr == "" {
-			return retry.Unrecoverable(merr.WrapErrServiceInternalMsg("rootCoord.catalogService.address is not configured"))
-		}
-		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-		if err != nil {
-			return err
-		}
-		catalogServiceClient = catalogpb.NewCatalogServiceClient(conn)
-		log.Ctx(initCtx).Info("RootCoord meta routed to external catalog service", zap.String("address", addr))
-	}
-
+	var sourceKV kv.MetaKv
 	fn := func() error {
 		var catalog metastore.RootCoordCatalog
-		var err error
 
 		switch Params.MetaStoreCfg.MetaStoreType.GetValue() {
 		case util.MetaStoreTypeEtcd:
@@ -416,31 +403,84 @@ func (c *Core) initMetaTable(initCtx context.Context) error {
 			metaKV := c.metaKVCreator()
 			kvmetastore.StartLegacySnapshotGC(c.ctx, metaKV)
 			kvmetastore.StartLegacyTombstoneGC(c.ctx, metaKV)
+			sourceKV = metaKV
 			catalog = kvmetastore.NewCatalog(metaKV)
 		case util.MetaStoreTypeTiKV:
 			log.Ctx(initCtx).Info("Using tikv as meta storage.")
 			metaKV := c.metaKVCreator()
 			kvmetastore.StartLegacySnapshotGC(c.ctx, metaKV)
 			kvmetastore.StartLegacyTombstoneGC(c.ctx, metaKV)
+			sourceKV = metaKV
 			catalog = kvmetastore.NewCatalog(metaKV)
 		default:
 			return retry.Unrecoverable(merr.WrapErrServiceInternalMsg("not supported meta store: %s", Params.MetaStoreCfg.MetaStoreType.GetValue()))
 		}
 
-		if c.meta, err = NewMetaTable(c.ctx, catalog, c.tsoAllocator); err != nil {
+		local, err := NewMetaTable(c.ctx, catalog, c.tsoAllocator)
+		if err != nil {
 			return err
 		}
 
-		// Wrap the local MetaTable as the fallback for not-yet-migrated methods while
-		// migrated methods go over gRPC.
-		if catalogServiceClient != nil {
-			c.meta = NewRemoteMetaTable(c.meta, catalogServiceClient)
-		}
-
+		// c.meta is always a switchable wrapper so the catalog backend can be cut over at
+		// runtime (block-write copy migration) with no data race against the naked c.meta readers.
+		sw := NewSwitchableMetaTable(local)
+		c.meta = sw
+		c.catalogSwitchable = sw
+		c.catalogLocalMeta = local
+		c.catalogSourceKV = sourceKV
 		return nil
 	}
 
-	return retry.Do(initCtx, fn, retry.Attempts(10))
+	if err := retry.Do(initCtx, fn, retry.Attempts(10)); err != nil {
+		return err
+	}
+
+	// Catalog-service PoC: start the converge watcher. When rootCoord.catalogService.enabled
+	// flips true at runtime, this cluster migrates its metadata into the pooled catalog service
+	// (idempotent via a durable marker) and cuts c.meta over to a discovery-routed client.
+	if addr := Params.RootCoordCfg.CatalogServicePoCAddress.GetValue(); addr != "" {
+		go c.catalogConvergeLoop(addr)
+	}
+	return nil
+}
+
+// catalogConvergeLoop watches the enabled flag and, once on, converges this cluster onto the
+// catalog service (migrate-if-needed then route). It exits after a successful converge; the
+// durable marker keeps it idempotent across restarts.
+func (c *Core) catalogConvergeLoop(addr string) {
+	router := catalogclient.NewRouter(addr)
+	ns := Params.CommonCfg.ClusterName.GetValue()
+	rc := catalogclient.NewRoutingClient(router, ns)
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-c.ctx.Done():
+			router.Close()
+			return
+		case <-ticker.C:
+			if !Params.RootCoordCfg.CatalogServicePoCEnabled.GetAsBool() {
+				continue
+			}
+			cfg := MigrationConfig{
+				Switchable: c.catalogSwitchable,
+				Source:     c.catalogLocalMeta,
+				SourceKV:   c.catalogSourceKV,
+				Roots:      []string{"root-coord"},
+				Namespace:  ns,
+				Client:     rc,
+				BuildRemote: func() (IMetaTable, error) {
+					return NewRemoteMetaTable(c.catalogLocalMeta, rc), nil
+				},
+			}
+			if err := convergeCatalog(c.ctx, cfg); err != nil {
+				log.Ctx(c.ctx).Warn("catalog converge failed, will retry", zap.Error(err))
+				continue
+			}
+			log.Ctx(c.ctx).Info("catalog converge done; routed to the catalog service", zap.String("namespace", ns))
+			return
+		}
+	}
 }
 
 func (c *Core) initIDAllocator(initCtx context.Context) error {

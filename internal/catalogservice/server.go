@@ -17,6 +17,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	"github.com/milvus-io/milvus/internal/rootcoord"
+	"github.com/milvus-io/milvus/pkg/v3/kv"
 	"github.com/milvus-io/milvus/pkg/v3/proto/catalogpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
@@ -28,11 +29,48 @@ import (
 type Server struct {
 	catalogpb.UnimplementedCatalogServiceServer
 	meta rootcoord.IMetaTable
+
+	// importKV resolves a namespace to its raw backend KV for bulk import/verify. Only the
+	// service touches the backend; clients never get a TiKV/etcd handle. Nil disables migration.
+	importKV func(namespace string) kv.MetaKv
+
+	// routeProvider serves the discovery route map (members + shard->owner). Nil disables it.
+	routeProvider RouteMapProvider
+	// registry backs DeleteNamespace cache eviction. Nil disables it.
+	registry *Registry
+}
+
+// RouteMapProvider supplies the discovery route map so clients can route each namespace to
+// its owner without reading the pooled etcd directly. routing.Coordinator satisfies it.
+type RouteMapProvider interface {
+	RouteMap(ctx context.Context) (members []string, shardOwner map[int]string, err error)
+}
+
+// ServerOption configures optional Server capabilities.
+type ServerOption func(*Server)
+
+// WithImportKV enables the migration RPCs by giving the service per-namespace backend access.
+func WithImportKV(resolver func(namespace string) kv.MetaKv) ServerOption {
+	return func(s *Server) { s.importKV = resolver }
+}
+
+// WithRouteProvider enables the GetRouteMap discovery RPC.
+func WithRouteProvider(p RouteMapProvider) ServerOption {
+	return func(s *Server) { s.routeProvider = p }
+}
+
+// WithRegistry lets DeleteNamespace evict a namespace's cached MetaTable.
+func WithRegistry(reg *Registry) ServerOption {
+	return func(s *Server) { s.registry = reg }
 }
 
 // NewServer wires the service over an already-constructed real MetaTable.
-func NewServer(meta rootcoord.IMetaTable) *Server {
-	return &Server{meta: meta}
+func NewServer(meta rootcoord.IMetaTable, opts ...ServerOption) *Server {
+	s := &Server{meta: meta}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // ---- Database DDL ----

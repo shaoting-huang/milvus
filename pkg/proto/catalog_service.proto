@@ -15,6 +15,8 @@ import "catalog_grant.proto";
 import "catalog_privilegegroup.proto";
 import "catalog_dbchecks.proto";
 import "catalog_fileresource.proto";
+import "catalog_migration.proto";
+import "catalog_admin.proto";
 
 // CatalogService exposes RootCoord's IMetaTable surface as a standalone service: the
 // real ddLock + in-memory maps + RootCoordCatalog persistence live in the service
@@ -110,6 +112,12 @@ service CatalogService {
   rpc IncFileResourceRefCnt(IncFileResourceRefCntRequest) returns (IncFileResourceRefCntResponse);
   rpc DecFileResourceRefCnt(DecFileResourceRefCntRequest) returns (DecFileResourceRefCntResponse);
   rpc RecoverFileResourceRefCnt(RecoverFileResourceRefCntRequest) returns (RecoverFileResourceRefCntResponse);
+  // ---- Migration (bulk import; backend stays behind the service) ----
+  rpc BulkImport(BulkImportRequest) returns (BulkImportResponse);
+  rpc VerifyImport(VerifyImportRequest) returns (VerifyImportResponse);
+  // ---- Admin / discovery ----
+  rpc GetRouteMap(GetRouteMapRequest) returns (GetRouteMapResponse);
+  rpc DeleteNamespace(DeleteNamespaceRequest) returns (DeleteNamespaceResponse);
 }
 
 message CreateDatabaseRequest {

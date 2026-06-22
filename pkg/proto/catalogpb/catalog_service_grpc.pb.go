@@ -99,6 +99,10 @@ const (
 	CatalogService_IncFileResourceRefCnt_FullMethodName          = "/milvus.proto.catalog.CatalogService/IncFileResourceRefCnt"
 	CatalogService_DecFileResourceRefCnt_FullMethodName          = "/milvus.proto.catalog.CatalogService/DecFileResourceRefCnt"
 	CatalogService_RecoverFileResourceRefCnt_FullMethodName      = "/milvus.proto.catalog.CatalogService/RecoverFileResourceRefCnt"
+	CatalogService_BulkImport_FullMethodName                     = "/milvus.proto.catalog.CatalogService/BulkImport"
+	CatalogService_VerifyImport_FullMethodName                   = "/milvus.proto.catalog.CatalogService/VerifyImport"
+	CatalogService_GetRouteMap_FullMethodName                    = "/milvus.proto.catalog.CatalogService/GetRouteMap"
+	CatalogService_DeleteNamespace_FullMethodName                = "/milvus.proto.catalog.CatalogService/DeleteNamespace"
 )
 
 // CatalogServiceClient is the client API for CatalogService service.
@@ -198,6 +202,12 @@ type CatalogServiceClient interface {
 	IncFileResourceRefCnt(ctx context.Context, in *IncFileResourceRefCntRequest, opts ...grpc.CallOption) (*IncFileResourceRefCntResponse, error)
 	DecFileResourceRefCnt(ctx context.Context, in *DecFileResourceRefCntRequest, opts ...grpc.CallOption) (*DecFileResourceRefCntResponse, error)
 	RecoverFileResourceRefCnt(ctx context.Context, in *RecoverFileResourceRefCntRequest, opts ...grpc.CallOption) (*RecoverFileResourceRefCntResponse, error)
+	// ---- Migration (bulk import; backend stays behind the service) ----
+	BulkImport(ctx context.Context, in *BulkImportRequest, opts ...grpc.CallOption) (*BulkImportResponse, error)
+	VerifyImport(ctx context.Context, in *VerifyImportRequest, opts ...grpc.CallOption) (*VerifyImportResponse, error)
+	// ---- Admin / discovery ----
+	GetRouteMap(ctx context.Context, in *GetRouteMapRequest, opts ...grpc.CallOption) (*GetRouteMapResponse, error)
+	DeleteNamespace(ctx context.Context, in *DeleteNamespaceRequest, opts ...grpc.CallOption) (*DeleteNamespaceResponse, error)
 }
 
 type catalogServiceClient struct {
@@ -1008,6 +1018,46 @@ func (c *catalogServiceClient) RecoverFileResourceRefCnt(ctx context.Context, in
 	return out, nil
 }
 
+func (c *catalogServiceClient) BulkImport(ctx context.Context, in *BulkImportRequest, opts ...grpc.CallOption) (*BulkImportResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BulkImportResponse)
+	err := c.cc.Invoke(ctx, CatalogService_BulkImport_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *catalogServiceClient) VerifyImport(ctx context.Context, in *VerifyImportRequest, opts ...grpc.CallOption) (*VerifyImportResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(VerifyImportResponse)
+	err := c.cc.Invoke(ctx, CatalogService_VerifyImport_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *catalogServiceClient) GetRouteMap(ctx context.Context, in *GetRouteMapRequest, opts ...grpc.CallOption) (*GetRouteMapResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetRouteMapResponse)
+	err := c.cc.Invoke(ctx, CatalogService_GetRouteMap_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *catalogServiceClient) DeleteNamespace(ctx context.Context, in *DeleteNamespaceRequest, opts ...grpc.CallOption) (*DeleteNamespaceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteNamespaceResponse)
+	err := c.cc.Invoke(ctx, CatalogService_DeleteNamespace_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CatalogServiceServer is the server API for CatalogService service.
 // All implementations should embed UnimplementedCatalogServiceServer
 // for forward compatibility.
@@ -1105,6 +1155,12 @@ type CatalogServiceServer interface {
 	IncFileResourceRefCnt(context.Context, *IncFileResourceRefCntRequest) (*IncFileResourceRefCntResponse, error)
 	DecFileResourceRefCnt(context.Context, *DecFileResourceRefCntRequest) (*DecFileResourceRefCntResponse, error)
 	RecoverFileResourceRefCnt(context.Context, *RecoverFileResourceRefCntRequest) (*RecoverFileResourceRefCntResponse, error)
+	// ---- Migration (bulk import; backend stays behind the service) ----
+	BulkImport(context.Context, *BulkImportRequest) (*BulkImportResponse, error)
+	VerifyImport(context.Context, *VerifyImportRequest) (*VerifyImportResponse, error)
+	// ---- Admin / discovery ----
+	GetRouteMap(context.Context, *GetRouteMapRequest) (*GetRouteMapResponse, error)
+	DeleteNamespace(context.Context, *DeleteNamespaceRequest) (*DeleteNamespaceResponse, error)
 }
 
 // UnimplementedCatalogServiceServer should be embedded to have
@@ -1353,6 +1409,18 @@ func (UnimplementedCatalogServiceServer) DecFileResourceRefCnt(context.Context, 
 }
 func (UnimplementedCatalogServiceServer) RecoverFileResourceRefCnt(context.Context, *RecoverFileResourceRefCntRequest) (*RecoverFileResourceRefCntResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RecoverFileResourceRefCnt not implemented")
+}
+func (UnimplementedCatalogServiceServer) BulkImport(context.Context, *BulkImportRequest) (*BulkImportResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method BulkImport not implemented")
+}
+func (UnimplementedCatalogServiceServer) VerifyImport(context.Context, *VerifyImportRequest) (*VerifyImportResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method VerifyImport not implemented")
+}
+func (UnimplementedCatalogServiceServer) GetRouteMap(context.Context, *GetRouteMapRequest) (*GetRouteMapResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetRouteMap not implemented")
+}
+func (UnimplementedCatalogServiceServer) DeleteNamespace(context.Context, *DeleteNamespaceRequest) (*DeleteNamespaceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteNamespace not implemented")
 }
 func (UnimplementedCatalogServiceServer) testEmbeddedByValue() {}
 
@@ -2814,6 +2882,78 @@ func _CatalogService_RecoverFileResourceRefCnt_Handler(srv interface{}, ctx cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CatalogService_BulkImport_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BulkImportRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CatalogServiceServer).BulkImport(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CatalogService_BulkImport_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CatalogServiceServer).BulkImport(ctx, req.(*BulkImportRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CatalogService_VerifyImport_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(VerifyImportRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CatalogServiceServer).VerifyImport(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CatalogService_VerifyImport_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CatalogServiceServer).VerifyImport(ctx, req.(*VerifyImportRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CatalogService_GetRouteMap_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetRouteMapRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CatalogServiceServer).GetRouteMap(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CatalogService_GetRouteMap_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CatalogServiceServer).GetRouteMap(ctx, req.(*GetRouteMapRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CatalogService_DeleteNamespace_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteNamespaceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CatalogServiceServer).DeleteNamespace(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CatalogService_DeleteNamespace_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CatalogServiceServer).DeleteNamespace(ctx, req.(*DeleteNamespaceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // CatalogService_ServiceDesc is the grpc.ServiceDesc for CatalogService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -3140,6 +3280,22 @@ var CatalogService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RecoverFileResourceRefCnt",
 			Handler:    _CatalogService_RecoverFileResourceRefCnt_Handler,
+		},
+		{
+			MethodName: "BulkImport",
+			Handler:    _CatalogService_BulkImport_Handler,
+		},
+		{
+			MethodName: "VerifyImport",
+			Handler:    _CatalogService_VerifyImport_Handler,
+		},
+		{
+			MethodName: "GetRouteMap",
+			Handler:    _CatalogService_GetRouteMap_Handler,
+		},
+		{
+			MethodName: "DeleteNamespace",
+			Handler:    _CatalogService_DeleteNamespace_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

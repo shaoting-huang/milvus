@@ -1935,7 +1935,7 @@ type rootCoordConfig struct {
 
 	// Catalog-service PoC: when enabled, RootCoord routes the migrated meta DDL to an
 	// external catalog service over gRPC instead of mutating its in-process MetaTable.
-	CatalogServicePoCEnabled ParamItem `refreshable:"false"`
+	CatalogServicePoCEnabled ParamItem `refreshable:"true"`
 	CatalogServicePoCAddress ParamItem `refreshable:"false"`
 }
 

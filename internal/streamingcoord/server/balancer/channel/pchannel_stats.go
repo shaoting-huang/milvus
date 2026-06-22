@@ -11,7 +11,23 @@ import (
 var StaticPChannelStatsManager = syncutil.NewFuture[*PchannelStatsManager]()
 
 // RecoverPChannelStatsManager recovers the pchannel stats manager.
+//
+// Idempotent: when the singleton is already set (e.g. the pooled catalog service builds
+// one MetaTable per namespace in a single process, each reload() calling Recover), the
+// vchannels are merged into the existing manager instead of attempting a second Set, which
+// would panic. Single-tenant callers Reset first, so they still get a fresh manager.
+var recoverPChannelStatsMu sync.Mutex
+
 func RecoverPChannelStatsManager(vchannels []string) {
+	// Serialize the check-then-Set so concurrent first-callers (e.g. multiple namespaces'
+	// MetaTable.reload() in the pooled catalog service) cannot both reach Set and double-close
+	// the Future's channel.
+	recoverPChannelStatsMu.Lock()
+	defer recoverPChannelStatsMu.Unlock()
+	if StaticPChannelStatsManager.Ready() {
+		StaticPChannelStatsManager.Get().AddVChannel(vchannels...)
+		return
+	}
 	m := &PchannelStatsManager{
 		mu:    sync.Mutex{},
 		n:     syncutil.NewVersionedNotifier(),

@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package milvus.proto.catalog;
+
+option go_package = "github.com/milvus-io/milvus/pkg/v3/proto/catalogpb";
+
+import "common.proto";
+
+// Admin/discovery RPCs. Clients fetch the route map from ANY catalog node (so they never
+// touch the pooled etcd directly) and route each namespace to its owner. On NOT-OWNER /
+// timeout they re-fetch and redirect.
+
+message GetRouteMapRequest {}
+message GetRouteMapResponse {
+  milvus.proto.common.Status status = 1;
+  repeated string members = 2;          // live catalog node ids/addresses
+  map<int32, string> shard_owner = 3;   // shard -> owner node (256 entries; unowned omitted)
+}
+
+message DeleteNamespaceRequest {
+  string namespace = 1;
+}
+message DeleteNamespaceResponse {
+  milvus.proto.common.Status status = 1;
+}
