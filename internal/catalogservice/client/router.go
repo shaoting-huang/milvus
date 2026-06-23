@@ -111,17 +111,25 @@ func (r *Router) OwnerOf(namespace string) string {
 	return r.shardOwner[routing.ShardOf(namespace)]
 }
 
-// termOf returns the owner's ownership term the router last discovered for a namespace (0 if
-// unknown). It is stamped on each request so the owner can fence a stale-route-map call.
-func (r *Router) termOf(namespace string) int64 {
+// routeFor returns the owner address and its ownership term for a namespace in a SINGLE locked
+// read, so a concurrent Refresh cannot splice a new-generation term onto an old-generation
+// owner (a mismatch would only get fenced and retried, but reading both atomically avoids the
+// wasted round trip). The term is stamped on each request so the owner can fence a
+// stale-route-map call.
+func (r *Router) routeFor(namespace string) (owner string, term int64) {
+	shard := routing.ShardOf(namespace)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.shardTerm[routing.ShardOf(namespace)]
+	return r.shardOwner[shard], r.shardTerm[shard]
 }
 
 // Do runs fn against the catalog node that owns namespace, stamping the namespace on the
 // context. On a not-owner / unavailable error it re-fetches the route map and retries at the
 // (possibly new) owner — transparently surviving failover and ownership moves.
+//
+// The (owner, term) pair is read atomically via routeFor, but conn() and fn() then run without
+// the lock; a concurrent Refresh between routeFor and fn can send a new-term request to the old
+// owner, which the server fences as a retriable error — self-corrected on the next attempt.
 func (r *Router) Do(ctx context.Context, namespace string, fn func(ctx context.Context, c catalogpb.CatalogServiceClient) error) error {
 	const maxAttempts = 4
 	var lastErr error
@@ -129,13 +137,13 @@ func (r *Router) Do(ctx context.Context, namespace string, fn func(ctx context.C
 		if err := ctx.Err(); err != nil { // caller cancelled/timed out: stop, don't churn the route map
 			return err
 		}
-		owner := r.OwnerOf(namespace)
+		owner, term := r.routeFor(namespace)
 		if owner == "" {
 			if err := r.Refresh(ctx); err != nil {
 				lastErr = err
 				continue
 			}
-			owner = r.OwnerOf(namespace)
+			owner, term = r.routeFor(namespace)
 			if owner == "" {
 				lastErr = merr.WrapErrServiceUnavailable("namespace " + namespace + " has no owner yet")
 				continue
@@ -147,7 +155,7 @@ func (r *Router) Do(ctx context.Context, namespace string, fn func(ctx context.C
 			_ = r.Refresh(ctx)
 			continue
 		}
-		err = fn(nsmeta.WithTerm(ctx, namespace, r.termOf(namespace)), catalogpb.NewCatalogServiceClient(c))
+		err = fn(nsmeta.WithTerm(ctx, namespace, term), catalogpb.NewCatalogServiceClient(c))
 		if err == nil {
 			return nil
 		}
