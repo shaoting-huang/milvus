@@ -43,7 +43,7 @@ type Server struct {
 // RouteMapProvider supplies the discovery route map so clients can route each namespace to
 // its owner without reading the pooled etcd directly. routing.Coordinator satisfies it.
 type RouteMapProvider interface {
-	RouteMap(ctx context.Context) (members []string, shardOwner map[int]string, err error)
+	RouteMap(ctx context.Context) (members []string, shardOwner map[int]string, shardTerm map[int]int64, err error)
 }
 
 // ServerOption configures optional Server capabilities.

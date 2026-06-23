@@ -73,3 +73,19 @@ func TestVerifyImportDetectsMismatch(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, ver.GetMismatches(), "divergent snapshot must be reported")
 }
+
+// TestMigrationDisabledWithoutImportKV: a Server with no import-KV resolver must reject the
+// migration RPCs through a clean error status (never panic, never silently no-op) so the coord
+// aborts the migration and rolls back instead of cutting over to an empty backend.
+func TestMigrationDisabledWithoutImportKV(t *testing.T) {
+	srv := NewServer(nil) // no WithImportKV: migration capability disabled
+	ctx := context.Background()
+
+	imp, err := srv.BulkImport(ctx, &catalogpb.BulkImportRequest{Namespace: "x", Entries: entries(map[string]string{"k": "v"})})
+	require.NoError(t, err) // transport ok; the failure rides in the status
+	require.Error(t, merr.Error(imp.GetStatus()), "bulk import without a backend must report an error status")
+
+	ver, err := srv.VerifyImport(ctx, &catalogpb.VerifyImportRequest{Namespace: "x", Roots: []string{"root-coord"}})
+	require.NoError(t, err)
+	require.Error(t, merr.Error(ver.GetStatus()), "verify without a backend must report an error status")
+}

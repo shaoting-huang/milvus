@@ -13,10 +13,11 @@ import (
 type fakeRouteProvider struct {
 	members    []string
 	shardOwner map[int]string
+	shardTerm  map[int]int64
 }
 
-func (f fakeRouteProvider) RouteMap(context.Context) ([]string, map[int]string, error) {
-	return f.members, f.shardOwner, nil
+func (f fakeRouteProvider) RouteMap(context.Context) ([]string, map[int]string, map[int]int64, error) {
+	return f.members, f.shardOwner, f.shardTerm, nil
 }
 
 // TestGetRouteMap: the service returns members + shard->owner so a client can discover owners
@@ -25,6 +26,7 @@ func TestGetRouteMap(t *testing.T) {
 	srv := NewServer(nil, WithRouteProvider(fakeRouteProvider{
 		members:    []string{"node-a", "node-b"},
 		shardOwner: map[int]string{0: "node-a", 1: "node-b"},
+		shardTerm:  map[int]int64{0: 11, 1: 22},
 	}))
 	resp, err := srv.GetRouteMap(context.Background(), &catalogpb.GetRouteMapRequest{})
 	require.NoError(t, err)
@@ -32,6 +34,8 @@ func TestGetRouteMap(t *testing.T) {
 	require.ElementsMatch(t, []string{"node-a", "node-b"}, resp.GetMembers())
 	require.Equal(t, "node-a", resp.GetShardOwner()[0])
 	require.Equal(t, "node-b", resp.GetShardOwner()[1])
+	require.Equal(t, int64(11), resp.GetShardTerm()[0])
+	require.Equal(t, int64(22), resp.GetShardTerm()[1])
 }
 
 // TestDeleteNamespaceEvicts: deleting a namespace drops its cached MetaTable so a later Get

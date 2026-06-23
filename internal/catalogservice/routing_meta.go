@@ -2,7 +2,9 @@ package catalogservice
 
 import (
 	"context"
+	"strconv"
 
+	"github.com/milvus-io/milvus/internal/catalogservice/nsmeta"
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	"github.com/milvus-io/milvus/internal/rootcoord"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
@@ -45,6 +47,15 @@ func (r *routingMetaTable) resolve(ctx context.Context) (rootcoord.IMetaTable, e
 			return nil, merr.WrapErrServiceUnavailable("namespace " + ns + " is not owned by this catalog node")
 		}
 		term = r.provider.ShardTerm(ns)
+		// term fencing: a request that routed against a different ownership term came off a
+		// stale route map (ownership moved or was re-claimed). Reject it retriably so the
+		// client re-discovers the current owner. The lease window is the primary fence; this
+		// closes the gap where a stale route map still points at this node. A zero client term
+		// opts out (single-tenant / term-unaware caller).
+		if clientTerm := nsmeta.TermFrom(ctx); clientTerm != 0 && clientTerm != term {
+			return nil, merr.WrapErrServiceUnavailable("namespace " + ns + " ownership term changed (routed against " +
+				strconv.FormatInt(clientTerm, 10) + ", now " + strconv.FormatInt(term, 10) + "); redirect")
+		}
 	}
 	return r.reg.Get(ns, term)
 }

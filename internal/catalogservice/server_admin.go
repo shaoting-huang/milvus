@@ -15,13 +15,17 @@ func (s *Server) GetRouteMap(ctx context.Context, req *catalogpb.GetRouteMapRequ
 	if s.routeProvider == nil {
 		return &catalogpb.GetRouteMapResponse{Status: merr.Status(merr.WrapErrServiceInternalMsg("routing not enabled"))}, nil
 	}
-	members, shardOwner, err := s.routeProvider.RouteMap(ctx)
+	members, shardOwner, shardTerm, err := s.routeProvider.RouteMap(ctx)
 	resp := &catalogpb.GetRouteMapResponse{Status: merr.Status(err)}
 	if err == nil {
 		resp.Members = members
 		resp.ShardOwner = make(map[int32]string, len(shardOwner))
 		for shard, owner := range shardOwner {
 			resp.ShardOwner[int32(shard)] = owner
+		}
+		resp.ShardTerm = make(map[int32]int64, len(shardTerm))
+		for shard, term := range shardTerm {
+			resp.ShardTerm[int32(shard)] = term
 		}
 	}
 	return resp, nil

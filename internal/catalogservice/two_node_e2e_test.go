@@ -17,6 +17,7 @@ import (
 	tikvkv "github.com/milvus-io/milvus/internal/kv/tikv"
 	kvrootcoord "github.com/milvus-io/milvus/internal/metastore/kv/rootcoord"
 	"github.com/milvus-io/milvus/internal/rootcoord"
+	"github.com/milvus-io/milvus/pkg/v3/kv"
 	"github.com/milvus-io/milvus/pkg/v3/proto/catalogpb"
 	etcdpb "github.com/milvus-io/milvus/pkg/v3/proto/etcdpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
@@ -44,13 +45,16 @@ func startNode(t *testing.T, ecli *clientv3.Client, prefix, nsRoot string) *node
 	coord := routing.NewCoordinator(ecli, prefix, addr, 3, 200*time.Millisecond)
 	require.NoError(t, coord.Start(context.Background()))
 
+	// nsKV is shared by the MetaTable registry and bulk import so a namespace's live data and
+	// its migrated data land under the same TiKV prefix — a full mirror of cmd/catalogservice.
+	nsKV := func(namespace string) kv.MetaKv { return tikvkv.NewTiKV(tikvClient, nsRoot+"/"+namespace) }
 	reg := NewRegistry(func(namespace string) (rootcoord.IMetaTable, error) {
-		return rootcoord.NewMetaTable(context.Background(),
-			kvrootcoord.NewCatalog(tikvkv.NewTiKV(tikvClient, nsRoot+"/"+namespace)), newMockTSO())
+		return rootcoord.NewMetaTable(context.Background(), kvrootcoord.NewCatalog(nsKV(namespace)), newMockTSO())
 	})
 	srv := grpc.NewServer()
 	catalogpb.RegisterCatalogServiceServer(srv, NewServer(
 		NewRoutingMetaTable(reg, coord),
+		WithImportKV(nsKV),
 		WithRouteProvider(coord),
 		WithRegistry(reg),
 	))

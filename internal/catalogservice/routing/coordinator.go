@@ -193,23 +193,26 @@ func (c *Coordinator) ShardTerm(namespace string) int64 {
 	return c.OwnerTerm(ShardOf(namespace))
 }
 
-// RouteMap returns the current membership and shard->owner map for client discovery. Clients
-// fetch this from any node (via the GetRouteMap RPC) so they never read the pooled etcd
-// directly; they then route each namespace to ShardOf(ns)'s owner.
-func (c *Coordinator) RouteMap(ctx context.Context) ([]string, map[int]string, error) {
+// RouteMap returns the current membership, shard->owner map, and shard->owner-term map for
+// client discovery. Clients fetch this from any node (via the GetRouteMap RPC) so they never
+// read the pooled etcd directly; they then route each namespace to ShardOf(ns)'s owner and
+// stamp the owner's term so the service can fence requests made off a stale route map.
+func (c *Coordinator) RouteMap(ctx context.Context) ([]string, map[int]string, map[int]int64, error) {
 	members, err := ListMembers(ctx, c.cli, c.prefix)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	sm, err := LoadShardMap(ctx, c.cli, c.prefix)
+	om, err := LoadOwnershipMap(ctx, c.cli, c.prefix)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	shardOwner := make(map[int]string)
+	shardTerm := make(map[int]int64)
 	for s := 0; s < ShardCount; s++ {
-		if sm[s] != "" {
-			shardOwner[s] = sm[s]
+		if om[s].Owner != "" {
+			shardOwner[s] = om[s].Owner
+			shardTerm[s] = om[s].Term
 		}
 	}
-	return members, shardOwner, nil
+	return members, shardOwner, shardTerm, nil
 }

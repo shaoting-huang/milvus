@@ -473,7 +473,7 @@ func (c *Core) catalogConvergeLoop(addr string) {
 					return NewRemoteMetaTable(c.catalogLocalMeta, rc), nil
 				},
 			}
-			if err := convergeCatalog(c.ctx, cfg); err != nil {
+			if err := ConvergeCatalog(c.ctx, cfg); err != nil {
 				log.Ctx(c.ctx).Warn("catalog converge failed, will retry", zap.Error(err))
 				continue
 			}

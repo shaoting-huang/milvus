@@ -27,7 +27,7 @@ func TestConvergeMigratesWhenNoMarker(t *testing.T) {
 		Roots: []string{"root-coord"}, Namespace: "convCluster", Client: fake,
 		BuildRemote: func() (IMetaTable, error) { return routerBacked, nil },
 	}
-	require.NoError(t, convergeCatalog(context.Background(), cfg))
+	require.NoError(t, ConvergeCatalog(context.Background(), cfg))
 
 	require.NotEmpty(t, fake.imported, "fresh cluster must be migrated (bulk-imported)")
 	has, err := srcKV.Has(context.Background(), catalogMigratedMarker)
@@ -47,7 +47,7 @@ func TestConvergeRoutesWhenMarked(t *testing.T) {
 		Roots: []string{"root-coord"}, Namespace: "convCluster", Client: fake,
 		BuildRemote: func() (IMetaTable, error) { built = true; return source, nil },
 	}
-	require.NoError(t, convergeCatalog(context.Background(), cfg))
+	require.NoError(t, ConvergeCatalog(context.Background(), cfg))
 
 	require.Empty(t, fake.imported, "an already-migrated cluster must NOT re-import")
 	require.True(t, built, "an already-migrated cluster must still cut over (route to the service)")

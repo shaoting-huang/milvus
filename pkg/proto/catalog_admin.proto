@@ -15,6 +15,7 @@ message GetRouteMapResponse {
   milvus.proto.common.Status status = 1;
   repeated string members = 2;          // live catalog node ids/addresses
   map<int32, string> shard_owner = 3;   // shard -> owner node (256 entries; unowned omitted)
+  map<int32, int64> shard_term = 4;     // shard -> owner's ownership term, for client-side fencing
 }
 
 message DeleteNamespaceRequest {

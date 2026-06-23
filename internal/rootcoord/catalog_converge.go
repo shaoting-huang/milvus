@@ -13,14 +13,14 @@ import (
 // across restarts: once set, the coord just routes to the service instead of re-migrating.
 const catalogMigratedMarker = "root-coord/_catalog_migrated"
 
-// convergeCatalog drives this cluster to the desired state of "served by the catalog service",
+// ConvergeCatalog drives this cluster to the desired state of "served by the catalog service",
 // the action behind flipping rootCoord.catalogService.enabled at runtime:
 //
 //   - not yet migrated -> Migrate (gate -> bulk-import -> verify -> cut over). On success it
 //     stamps the marker; on a verify failure Migrate has already rolled back to the source and
 //     the marker stays unset, so the next tick retries.
 //   - already migrated -> just cut over to the service-backed meta (no re-migration).
-func convergeCatalog(ctx context.Context, cfg MigrationConfig) error {
+func ConvergeCatalog(ctx context.Context, cfg MigrationConfig) error {
 	migrated, err := cfg.SourceKV.Has(ctx, catalogMigratedMarker)
 	if err != nil {
 		return err

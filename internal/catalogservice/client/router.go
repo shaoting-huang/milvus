@@ -26,12 +26,13 @@ type Router struct {
 
 	mu         sync.Mutex
 	shardOwner map[int]string // shard -> owner address (node id == gRPC address)
+	shardTerm  map[int]int64  // shard -> owner's ownership term, stamped on requests for fencing
 	conns      map[string]*grpc.ClientConn
 }
 
 // NewRouter creates a discovery router seeded with one or more catalog node addresses.
 func NewRouter(bootstrap ...string) *Router {
-	return &Router{bootstrap: bootstrap, shardOwner: map[int]string{}, conns: map[string]*grpc.ClientConn{}}
+	return &Router{bootstrap: bootstrap, shardOwner: map[int]string{}, shardTerm: map[int]int64{}, conns: map[string]*grpc.ClientConn{}}
 }
 
 // Close shuts all pooled connections.
@@ -87,8 +88,13 @@ func (r *Router) Refresh(ctx context.Context) error {
 		for shard, a := range resp.GetShardOwner() {
 			owner[int(shard)] = a
 		}
+		term := make(map[int]int64, len(resp.GetShardTerm()))
+		for shard, tm := range resp.GetShardTerm() {
+			term[int(shard)] = tm
+		}
 		r.mu.Lock()
 		r.shardOwner = owner
+		r.shardTerm = term
 		r.mu.Unlock()
 		return nil
 	}
@@ -103,6 +109,14 @@ func (r *Router) OwnerOf(namespace string) string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.shardOwner[routing.ShardOf(namespace)]
+}
+
+// termOf returns the owner's ownership term the router last discovered for a namespace (0 if
+// unknown). It is stamped on each request so the owner can fence a stale-route-map call.
+func (r *Router) termOf(namespace string) int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.shardTerm[routing.ShardOf(namespace)]
 }
 
 // Do runs fn against the catalog node that owns namespace, stamping the namespace on the
@@ -133,7 +147,7 @@ func (r *Router) Do(ctx context.Context, namespace string, fn func(ctx context.C
 			_ = r.Refresh(ctx)
 			continue
 		}
-		err = fn(nsmeta.With(ctx, namespace), catalogpb.NewCatalogServiceClient(c))
+		err = fn(nsmeta.WithTerm(ctx, namespace, r.termOf(namespace)), catalogpb.NewCatalogServiceClient(c))
 		if err == nil {
 			return nil
 		}
