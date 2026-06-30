@@ -549,6 +549,10 @@ generate-mockery-coordmeta: getdeps
 	# must be generated from there so they do not drift from the interfaces.
 	@cd $(PWD)/pkg && $(INSTALL_PATH)/mockery --name=RootCoordCatalog --dir=./metastore --output=./metastore/mocks --filename=mock_rootcoord_catalog.go --with-expecter --structname=RootCoordCatalog --outpkg=mocks
 	@cd $(PWD)/pkg && $(INSTALL_PATH)/mockery --name=TSOAllocator --dir=./coordmeta/rootcoord --output=./coordmeta/rootcoord/mocktso --filename=allocator.go --with-expecter --structname=Allocator --outpkg=mocktso
+generate-mockery-streamingcoord-meta: getdeps
+	# StreamingCoordCataLog was moved into the pkg/v3 module; its mock lives in the
+	# pkg module and must be generated from there so it does not drift from the interface.
+	@cd $(PWD)/pkg && $(INSTALL_PATH)/mockery --name=StreamingCoordCataLog --dir=./metastore --output=./metastore/mocks --filename=mock_streamingcoord_catalog.go --with-expecter --structname=MockStreamingCoordCataLog --outpkg=mocks
 
 generate-mockery-utils: getdeps
 	# dependency.Factory
@@ -586,7 +590,7 @@ generate-mockery-client:
 generate-mockery-cdc: getdeps
 	$(INSTALL_PATH)/mockery --config $(PWD)/internal/cdc/.mockery.yaml
 
-generate-mockery: generate-mockery-types generate-mockery-kv generate-mockery-rootcoord generate-mockery-proxy generate-mockery-querycoord generate-mockery-querynode generate-mockery-datacoord generate-mockery-pkg generate-mockery-coordmeta generate-mockery-internal generate-mockery-client
+generate-mockery: generate-mockery-types generate-mockery-kv generate-mockery-rootcoord generate-mockery-proxy generate-mockery-querycoord generate-mockery-querynode generate-mockery-datacoord generate-mockery-streamingcoord-meta generate-mockery-pkg generate-mockery-coordmeta generate-mockery-internal generate-mockery-client
 
 generate-yaml: milvus-tools
 	@echo "Updating milvus config yaml"
