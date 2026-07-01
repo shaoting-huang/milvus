@@ -6,8 +6,8 @@ import (
 	context "context"
 
 	msgpb "github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
-	metastore "github.com/milvus-io/milvus/internal/metastore"
-	model "github.com/milvus-io/milvus/internal/metastore/model"
+	metastore "github.com/milvus-io/milvus/pkg/v3/metastore"
+	model "github.com/milvus-io/milvus/pkg/v3/metastore/model"
 	datapb "github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	indexpb "github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 	internalpb "github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
