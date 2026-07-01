@@ -60,11 +60,7 @@ func (s *analyzeTaskSuite) SetupSuite() {
 
 	// Mock analyze meta
 	catalog := catalogmocks.NewDataCoordCatalog(s.T())
-	analyzeMt := &analyzeMeta{
-		ctx:     context.Background(),
-		catalog: catalog,
-		tasks:   make(map[int64]*indexpb.AnalyzeTask),
-	}
+	analyzeMt := newAnalyzeMetaWithTasks(context.Background(), catalog, make(map[int64]*indexpb.AnalyzeTask))
 
 	// Add task to analyze meta
 	analyzeTask := &indexpb.AnalyzeTask{
@@ -81,7 +77,7 @@ func (s *analyzeTaskSuite) SetupSuite() {
 		FailReason:   "",
 		Dim:          128,
 	}
-	analyzeMt.tasks[s.taskID] = analyzeTask
+	analyzeMt.Tasks()[s.taskID] = analyzeTask
 
 	schema := &schemapb.CollectionSchema{
 		Fields: []*schemapb.FieldSchema{
@@ -172,13 +168,13 @@ func (s *analyzeTaskSuite) TestCreateTaskOnWorker() {
 
 	s.Run("task not exist in meta", func() {
 		// Remove task from meta
-		originalTask := s.mt.analyzeMeta.tasks[s.taskID]
-		delete(s.mt.analyzeMeta.tasks, s.taskID)
+		originalTask := s.mt.analyzeMeta.Tasks()[s.taskID]
+		delete(s.mt.analyzeMeta.Tasks(), s.taskID)
 		at.CreateTaskOnWorker(1, session.NewMockCluster(s.T()))
 		s.Equal(indexpb.JobState_JobStateNone, at.GetState())
 
 		// Restore task
-		s.mt.analyzeMeta.tasks[s.taskID] = originalTask
+		s.mt.analyzeMeta.Tasks()[s.taskID] = originalTask
 	})
 
 	s.Run("successful creation", func() {
@@ -188,7 +184,7 @@ func (s *analyzeTaskSuite) TestCreateTaskOnWorker() {
 		// Mock the UpdateVersion function
 		catalog := catalogmocks.NewDataCoordCatalog(s.T())
 		catalog.On("SaveAnalyzeTask", mock.Anything, mock.Anything).Return(nil)
-		s.mt.analyzeMeta.catalog = catalog
+		s.mt.analyzeMeta.SetCatalog(catalog)
 
 		at.CreateTaskOnWorker(1, cluster)
 		s.Equal(indexpb.JobState_JobStateInProgress, at.GetState())
@@ -229,7 +225,7 @@ func (s *analyzeTaskSuite) TestCreateTaskOnWorker_SegmentNil() {
 	at := s.newTask()
 	catalog := catalogmocks.NewDataCoordCatalog(s.T())
 	catalog.On("SaveAnalyzeTask", mock.Anything, mock.Anything).Return(nil)
-	s.mt.analyzeMeta.catalog = catalog
+	s.mt.analyzeMeta.SetCatalog(catalog)
 
 	at.CreateTaskOnWorker(1, session.NewMockCluster(s.T()))
 	s.Equal(indexpb.JobState_JobStateFailed, at.GetState())
@@ -258,7 +254,7 @@ func (s *analyzeTaskSuite) TestCreateTaskOnWorker_DimExtractionError() {
 	at := s.newTask()
 	catalog := catalogmocks.NewDataCoordCatalog(s.T())
 	catalog.On("SaveAnalyzeTask", mock.Anything, mock.Anything).Return(nil)
-	s.mt.analyzeMeta.catalog = catalog
+	s.mt.analyzeMeta.SetCatalog(catalog)
 
 	at.CreateTaskOnWorker(1, session.NewMockCluster(s.T()))
 	// Should reset to Init state on dim error
@@ -273,7 +269,7 @@ func (s *analyzeTaskSuite) TestCreateTaskOnWorker_DataTooSmall() {
 	at := s.newTask()
 	catalog := catalogmocks.NewDataCoordCatalog(s.T())
 	catalog.On("SaveAnalyzeTask", mock.Anything, mock.Anything).Return(nil)
-	s.mt.analyzeMeta.catalog = catalog
+	s.mt.analyzeMeta.SetCatalog(catalog)
 
 	at.CreateTaskOnWorker(1, session.NewMockCluster(s.T()))
 	// data too small → skip → mark as finished
@@ -292,7 +288,7 @@ func (s *analyzeTaskSuite) TestCreateTaskOnWorker_NumClustersCapped() {
 	at := s.newTask()
 	catalog := catalogmocks.NewDataCoordCatalog(s.T())
 	catalog.On("SaveAnalyzeTask", mock.Anything, mock.Anything).Return(nil)
-	s.mt.analyzeMeta.catalog = catalog
+	s.mt.analyzeMeta.SetCatalog(catalog)
 
 	cluster := session.NewMockCluster(s.T())
 	cluster.EXPECT().CreateAnalyze(mock.Anything, mock.MatchedBy(func(req *workerpb.AnalyzeRequest) bool {
@@ -311,7 +307,7 @@ func (s *analyzeTaskSuite) TestCreateTaskOnWorker_CreateAnalyzeError() {
 	at := s.newTask()
 	catalog := catalogmocks.NewDataCoordCatalog(s.T())
 	catalog.On("SaveAnalyzeTask", mock.Anything, mock.Anything).Return(nil)
-	s.mt.analyzeMeta.catalog = catalog
+	s.mt.analyzeMeta.SetCatalog(catalog)
 
 	cluster := session.NewMockCluster(s.T())
 	cluster.EXPECT().CreateAnalyze(mock.Anything, mock.Anything).Return(fmt.Errorf("node down"))
@@ -330,7 +326,7 @@ func (s *analyzeTaskSuite) TestCreateTaskOnWorker_SegmentStatsPopulated() {
 	at := s.newTask()
 	catalog := catalogmocks.NewDataCoordCatalog(s.T())
 	catalog.On("SaveAnalyzeTask", mock.Anything, mock.Anything).Return(nil)
-	s.mt.analyzeMeta.catalog = catalog
+	s.mt.analyzeMeta.SetCatalog(catalog)
 
 	cluster := session.NewMockCluster(s.T())
 	cluster.EXPECT().CreateAnalyze(mock.Anything, mock.MatchedBy(func(req *workerpb.AnalyzeRequest) bool {
@@ -404,7 +400,7 @@ func (s *analyzeTaskSuite) TestQueryTaskOnWorker() {
 		// Mock the FinishTask function
 		catalog := catalogmocks.NewDataCoordCatalog(s.T())
 		catalog.EXPECT().SaveAnalyzeTask(mock.Anything, mock.Anything).Return(nil)
-		s.mt.analyzeMeta.catalog = catalog
+		s.mt.analyzeMeta.SetCatalog(catalog)
 
 		at.QueryTaskOnWorker(cluster)
 		s.Equal(indexpb.JobState_JobStateFinished, at.GetState())

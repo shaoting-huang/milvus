@@ -16,16 +16,19 @@
 
 package model
 
-import pkgmodel "github.com/milvus-io/milvus/pkg/v3/metastore/model"
+import "github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 
-// Index and its (un)marshal/clone helpers moved into the shared pkg/v3 module so
-// the DataCoordCatalog interface (which references them) can live in pkg/v3 too.
-// These aliases keep the ~70 internal call sites (model.Index, model.CloneIndex,
-// …) compiling unchanged.
-type Index = pkgmodel.Index
-
+// These fixtures previously lived in collection_test.go (which stays in
+// internal/metastore/model). index_test.go and segment_index_test.go moved into
+// this package, so the shared identifiers they reference are duplicated here.
 var (
-	UnmarshalIndexModel = pkgmodel.UnmarshalIndexModel
-	MarshalIndexModel   = pkgmodel.MarshalIndexModel
-	CloneIndex          = pkgmodel.CloneIndex
+	colID      int64 = 1
+	fieldID    int64 = 101
+	partID     int64 = 20
+	typeParams       = []*commonpb.KeyValuePair{
+		{
+			Key:   "field110-k1",
+			Value: "field110-v1",
+		},
+	}
 )

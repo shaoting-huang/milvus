@@ -18,6 +18,7 @@ package datacoord
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"sync"
@@ -27,8 +28,7 @@ import (
 	"github.com/samber/lo"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/milvus-io/milvus/internal/json"
-	"github.com/milvus-io/milvus/internal/metastore"
+	"github.com/milvus-io/milvus/pkg/v3/metastore"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/util/metricsinfo"
@@ -56,22 +56,22 @@ func newCompactionTaskStats(task *datapb.CompactionTask) *metricsinfo.Compaction
 	}
 }
 
-type compactionTaskMeta struct {
+type CompactionTaskMeta struct {
 	sync.RWMutex
 	ctx     context.Context
 	catalog metastore.DataCoordCatalog
 	// currently only clustering compaction task is stored in persist meta
 	compactionTasks map[int64]map[int64]*datapb.CompactionTask // triggerID -> planID
-	taskStats       *expirable.LRU[UniqueID, *metricsinfo.CompactionTask]
+	taskStats       *expirable.LRU[typeutil.UniqueID, *metricsinfo.CompactionTask]
 }
 
-func newCompactionTaskMeta(ctx context.Context, catalog metastore.DataCoordCatalog) (*compactionTaskMeta, error) {
-	csm := &compactionTaskMeta{
+func NewCompactionTaskMeta(ctx context.Context, catalog metastore.DataCoordCatalog) (*CompactionTaskMeta, error) {
+	csm := &CompactionTaskMeta{
 		RWMutex:         sync.RWMutex{},
 		ctx:             ctx,
 		catalog:         catalog,
 		compactionTasks: make(map[int64]map[int64]*datapb.CompactionTask, 0),
-		taskStats:       expirable.NewLRU[UniqueID, *metricsinfo.CompactionTask](512, nil, time.Minute*15),
+		taskStats:       expirable.NewLRU[typeutil.UniqueID, *metricsinfo.CompactionTask](512, nil, time.Minute*15),
 	}
 	if err := csm.reloadFromKV(); err != nil {
 		return nil, err
@@ -79,8 +79,8 @@ func newCompactionTaskMeta(ctx context.Context, catalog metastore.DataCoordCatal
 	return csm, nil
 }
 
-func (csm *compactionTaskMeta) reloadFromKV() error {
-	record := timerecord.NewTimeRecorder("compactionTaskMeta-reloadFromKV")
+func (csm *CompactionTaskMeta) reloadFromKV() error {
+	record := timerecord.NewTimeRecorder("CompactionTaskMeta-reloadFromKV")
 	compactionTasks, err := csm.catalog.ListCompactionTask(csm.ctx)
 	if err != nil {
 		return err
@@ -108,12 +108,12 @@ func (csm *compactionTaskMeta) reloadFromKV() error {
 		}
 		csm.saveCompactionTaskMemory(task)
 	}
-	mlog.Info(csm.ctx, "DataCoord compactionTaskMeta reloadFromKV done", mlog.Duration("duration", record.ElapseSpan()))
+	mlog.Info(csm.ctx, "DataCoord CompactionTaskMeta reloadFromKV done", mlog.Duration("duration", record.ElapseSpan()))
 	return nil
 }
 
 // GetCompactionTasks returns clustering compaction tasks from local cache
-func (csm *compactionTaskMeta) GetCompactionTasks() map[int64][]*datapb.CompactionTask {
+func (csm *CompactionTaskMeta) GetCompactionTasks() map[int64][]*datapb.CompactionTask {
 	csm.RLock()
 	defer csm.RUnlock()
 	res := make(map[int64][]*datapb.CompactionTask, 0)
@@ -127,7 +127,7 @@ func (csm *compactionTaskMeta) GetCompactionTasks() map[int64][]*datapb.Compacti
 	return res
 }
 
-func (csm *compactionTaskMeta) GetCompactionTasksByCollection(collectionID int64) map[int64][]*datapb.CompactionTask {
+func (csm *CompactionTaskMeta) GetCompactionTasksByCollection(collectionID int64) map[int64][]*datapb.CompactionTask {
 	csm.RLock()
 	defer csm.RUnlock()
 	res := make(map[int64][]*datapb.CompactionTask, 0)
@@ -147,7 +147,7 @@ func (csm *compactionTaskMeta) GetCompactionTasksByCollection(collectionID int64
 	return res
 }
 
-func (csm *compactionTaskMeta) GetCompactionTasksByTriggerID(triggerID int64) []*datapb.CompactionTask {
+func (csm *CompactionTaskMeta) GetCompactionTasksByTriggerID(triggerID int64) []*datapb.CompactionTask {
 	csm.RLock()
 	defer csm.RUnlock()
 	res := make([]*datapb.CompactionTask, 0)
@@ -160,7 +160,7 @@ func (csm *compactionTaskMeta) GetCompactionTasksByTriggerID(triggerID int64) []
 	return res
 }
 
-func (csm *compactionTaskMeta) SaveCompactionTask(ctx context.Context, task *datapb.CompactionTask) error {
+func (csm *CompactionTaskMeta) SaveCompactionTask(ctx context.Context, task *datapb.CompactionTask) error {
 	csm.Lock()
 	defer csm.Unlock()
 	if err := csm.catalog.SaveCompactionTask(ctx, task); err != nil {
@@ -171,7 +171,7 @@ func (csm *compactionTaskMeta) SaveCompactionTask(ctx context.Context, task *dat
 	return nil
 }
 
-func (csm *compactionTaskMeta) saveCompactionTaskMemory(task *datapb.CompactionTask) {
+func (csm *CompactionTaskMeta) saveCompactionTaskMemory(task *datapb.CompactionTask) {
 	_, triggerIDExist := csm.compactionTasks[task.TriggerID]
 	if !triggerIDExist {
 		csm.compactionTasks[task.TriggerID] = make(map[int64]*datapb.CompactionTask, 0)
@@ -180,7 +180,7 @@ func (csm *compactionTaskMeta) saveCompactionTaskMemory(task *datapb.CompactionT
 	csm.taskStats.Add(task.PlanID, newCompactionTaskStats(task))
 }
 
-func (csm *compactionTaskMeta) DropCompactionTask(ctx context.Context, task *datapb.CompactionTask) error {
+func (csm *CompactionTaskMeta) DropCompactionTask(ctx context.Context, task *datapb.CompactionTask) error {
 	csm.Lock()
 	defer csm.Unlock()
 	if err := csm.catalog.DropCompactionTask(ctx, task); err != nil {
@@ -197,7 +197,7 @@ func (csm *compactionTaskMeta) DropCompactionTask(ctx context.Context, task *dat
 	return nil
 }
 
-func (csm *compactionTaskMeta) TaskStatsJSON() string {
+func (csm *CompactionTaskMeta) TaskStatsJSON() string {
 	tasks := csm.taskStats.Values()
 	ret, err := json.Marshal(tasks)
 	if err != nil {

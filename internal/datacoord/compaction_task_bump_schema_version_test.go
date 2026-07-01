@@ -900,7 +900,7 @@ func (s *BumpSchemaVersionCompactionTaskSuite) TestCleanError() {
 	// separate from meta.catalog which is used by segment operations.
 	mockCatalog := mocks.NewDataCoordCatalog(s.T())
 	mockCatalog.EXPECT().SaveCompactionTask(mock.Anything, mock.Anything).Return(errors.New("catalog write error"))
-	s.meta.compactionTaskMeta.catalog = mockCatalog
+	s.meta.compactionTaskMeta.SetCatalog(mockCatalog)
 
 	task := s.generateBasicTask()
 	result := task.Clean()

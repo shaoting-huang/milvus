@@ -14,18 +14,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package model
+package datacoord
 
-import pkgmodel "github.com/milvus-io/milvus/pkg/v3/metastore/model"
+import coordmeta "github.com/milvus-io/milvus/pkg/v3/coordmeta/datacoord"
 
-// Index and its (un)marshal/clone helpers moved into the shared pkg/v3 module so
-// the DataCoordCatalog interface (which references them) can live in pkg/v3 too.
-// These aliases keep the ~70 internal call sites (model.Index, model.CloneIndex,
-// …) compiling unchanged.
-type Index = pkgmodel.Index
+// The analyze and compaction leaf managers moved into the shared
+// pkg/v3/coordmeta/datacoord package so the pooled catalog service can reuse the
+// same implementations. These aliases keep the meta facade (which holds them as
+// fields) and the ~dozen internal call sites compiling unchanged. The remaining
+// leaf managers (index / stats-task / partition-stats / import / copy-segment)
+// move in follow-ups.
+type (
+	analyzeMeta        = coordmeta.AnalyzeMeta
+	compactionTaskMeta = coordmeta.CompactionTaskMeta
+)
 
 var (
-	UnmarshalIndexModel = pkgmodel.UnmarshalIndexModel
-	MarshalIndexModel   = pkgmodel.MarshalIndexModel
-	CloneIndex          = pkgmodel.CloneIndex
+	newAnalyzeMeta          = coordmeta.NewAnalyzeMeta
+	newAnalyzeMetaWithTasks = coordmeta.NewAnalyzeMetaWithTasks
+	newCompactionTaskMeta   = coordmeta.NewCompactionTaskMeta
 )

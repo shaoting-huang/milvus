@@ -14,18 +14,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package model
+package datacoord
 
-import pkgmodel "github.com/milvus-io/milvus/pkg/v3/metastore/model"
+import "github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 
-// Index and its (un)marshal/clone helpers moved into the shared pkg/v3 module so
-// the DataCoordCatalog interface (which references them) can live in pkg/v3 too.
-// These aliases keep the ~70 internal call sites (model.Index, model.CloneIndex,
-// …) compiling unchanged.
-type Index = pkgmodel.Index
-
-var (
-	UnmarshalIndexModel = pkgmodel.UnmarshalIndexModel
-	MarshalIndexModel   = pkgmodel.MarshalIndexModel
-	CloneIndex          = pkgmodel.CloneIndex
-)
+// isCompactionTaskFinished mirrors the helper of the same name in
+// internal/datacoord/compaction_util.go. compactionTaskMeta moved into this
+// shared package and needs it, but compaction_util.go (and its many other
+// helpers) stays in internal/datacoord, so the leaf copy lives here. Keep the
+// two in sync until the rest of the compaction code follows into pkg.
+func isCompactionTaskFinished(t *datapb.CompactionTask) bool {
+	switch t.GetState() {
+	case datapb.CompactionTaskState_timeout,
+		datapb.CompactionTaskState_completed,
+		datapb.CompactionTaskState_cleaned,
+		datapb.CompactionTaskState_unknown:
+		return true
+	default:
+		return false
+	}
+}

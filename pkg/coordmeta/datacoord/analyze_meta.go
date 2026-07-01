@@ -22,7 +22,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	"github.com/milvus-io/milvus/internal/metastore"
+	"github.com/milvus-io/milvus/pkg/v3/metastore"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/workerpb"
@@ -30,7 +30,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/timerecord"
 )
 
-type analyzeMeta struct {
+type AnalyzeMeta struct {
 	sync.RWMutex
 
 	ctx     context.Context
@@ -41,8 +41,8 @@ type analyzeMeta struct {
 	tasks map[int64]*indexpb.AnalyzeTask
 }
 
-func newAnalyzeMeta(ctx context.Context, catalog metastore.DataCoordCatalog) (*analyzeMeta, error) {
-	mt := &analyzeMeta{
+func NewAnalyzeMeta(ctx context.Context, catalog metastore.DataCoordCatalog) (*AnalyzeMeta, error) {
+	mt := &AnalyzeMeta{
 		ctx:     ctx,
 		catalog: catalog,
 		tasks:   make(map[int64]*indexpb.AnalyzeTask),
@@ -54,24 +54,24 @@ func newAnalyzeMeta(ctx context.Context, catalog metastore.DataCoordCatalog) (*a
 	return mt, nil
 }
 
-func (m *analyzeMeta) reloadFromKV() error {
-	record := timerecord.NewTimeRecorder("analyzeMeta-reloadFromKV")
+func (m *AnalyzeMeta) reloadFromKV() error {
+	record := timerecord.NewTimeRecorder("AnalyzeMeta-reloadFromKV")
 
 	// load analyze stats
 	analyzeTasks, err := m.catalog.ListAnalyzeTasks(m.ctx)
 	if err != nil {
-		mlog.Warn(m.ctx, "analyzeMeta reloadFromKV load analyze tasks failed", mlog.Err(err))
+		mlog.Warn(m.ctx, "AnalyzeMeta reloadFromKV load analyze tasks failed", mlog.Err(err))
 		return err
 	}
 
 	for _, analyzeTask := range analyzeTasks {
 		m.tasks[analyzeTask.TaskID] = analyzeTask
 	}
-	mlog.Info(m.ctx, "analyzeMeta reloadFromKV done", mlog.Duration("duration", record.ElapseSpan()))
+	mlog.Info(m.ctx, "AnalyzeMeta reloadFromKV done", mlog.Duration("duration", record.ElapseSpan()))
 	return nil
 }
 
-func (m *analyzeMeta) saveTask(newTask *indexpb.AnalyzeTask) error {
+func (m *AnalyzeMeta) saveTask(newTask *indexpb.AnalyzeTask) error {
 	if err := m.catalog.SaveAnalyzeTask(m.ctx, newTask); err != nil {
 		return err
 	}
@@ -79,14 +79,14 @@ func (m *analyzeMeta) saveTask(newTask *indexpb.AnalyzeTask) error {
 	return nil
 }
 
-func (m *analyzeMeta) GetTask(taskID int64) *indexpb.AnalyzeTask {
+func (m *AnalyzeMeta) GetTask(taskID int64) *indexpb.AnalyzeTask {
 	m.RLock()
 	defer m.RUnlock()
 
 	return m.tasks[taskID]
 }
 
-func (m *analyzeMeta) AddAnalyzeTask(task *indexpb.AnalyzeTask) error {
+func (m *AnalyzeMeta) AddAnalyzeTask(task *indexpb.AnalyzeTask) error {
 	m.Lock()
 	defer m.Unlock()
 
@@ -95,7 +95,7 @@ func (m *analyzeMeta) AddAnalyzeTask(task *indexpb.AnalyzeTask) error {
 	return m.saveTask(task)
 }
 
-func (m *analyzeMeta) DropAnalyzeTask(ctx context.Context, taskID int64) error {
+func (m *AnalyzeMeta) DropAnalyzeTask(ctx context.Context, taskID int64) error {
 	m.Lock()
 	defer m.Unlock()
 
@@ -110,7 +110,7 @@ func (m *analyzeMeta) DropAnalyzeTask(ctx context.Context, taskID int64) error {
 	return nil
 }
 
-func (m *analyzeMeta) UpdateVersion(taskID int64, nodeID int64) error {
+func (m *AnalyzeMeta) UpdateVersion(taskID int64, nodeID int64) error {
 	m.Lock()
 	defer m.Unlock()
 
@@ -127,7 +127,7 @@ func (m *analyzeMeta) UpdateVersion(taskID int64, nodeID int64) error {
 	return m.saveTask(cloneT)
 }
 
-func (m *analyzeMeta) BuildingTask(taskID int64) error {
+func (m *AnalyzeMeta) BuildingTask(taskID int64) error {
 	m.Lock()
 	defer m.Unlock()
 
@@ -143,7 +143,7 @@ func (m *analyzeMeta) BuildingTask(taskID int64) error {
 	return m.saveTask(cloneT)
 }
 
-func (m *analyzeMeta) UpdateState(taskID int64, state indexpb.JobState, failReason string) error {
+func (m *AnalyzeMeta) UpdateState(taskID int64, state indexpb.JobState, failReason string) error {
 	m.Lock()
 	defer m.Unlock()
 
@@ -161,7 +161,7 @@ func (m *analyzeMeta) UpdateState(taskID int64, state indexpb.JobState, failReas
 	return m.saveTask(cloneT)
 }
 
-func (m *analyzeMeta) FinishTask(taskID int64, result *workerpb.AnalyzeResult) error {
+func (m *AnalyzeMeta) FinishTask(taskID int64, result *workerpb.AnalyzeResult) error {
 	m.Lock()
 	defer m.Unlock()
 
@@ -180,14 +180,14 @@ func (m *analyzeMeta) FinishTask(taskID int64, result *workerpb.AnalyzeResult) e
 	return m.saveTask(cloneT)
 }
 
-func (m *analyzeMeta) GetAllTasks() map[int64]*indexpb.AnalyzeTask {
+func (m *AnalyzeMeta) GetAllTasks() map[int64]*indexpb.AnalyzeTask {
 	m.RLock()
 	defer m.RUnlock()
 
 	return m.tasks
 }
 
-func (m *analyzeMeta) CheckCleanAnalyzeTask(taskID UniqueID) (bool, *indexpb.AnalyzeTask) {
+func (m *AnalyzeMeta) CheckCleanAnalyzeTask(taskID int64) (bool, *indexpb.AnalyzeTask) {
 	m.RLock()
 	defer m.RUnlock()
 

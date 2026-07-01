@@ -24,7 +24,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/milvus-io/milvus/internal/metastore/mocks"
+	"github.com/milvus-io/milvus/pkg/v3/metastore/mocks"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/workerpb"
 )
@@ -105,7 +105,7 @@ func (s *AnalyzeMetaSuite) Test_AnalyzeMeta() {
 
 	ctx := context.Background()
 
-	am, err := newAnalyzeMeta(ctx, catalog)
+	am, err := NewAnalyzeMeta(ctx, catalog)
 	s.NoError(err)
 	s.Equal(6, len(am.GetAllTasks()))
 
@@ -169,7 +169,7 @@ func (s *AnalyzeMetaSuite) Test_failCase() {
 	catalog := mocks.NewDataCoordCatalog(s.T())
 	catalog.EXPECT().ListAnalyzeTasks(mock.Anything).Return(nil, errors.New("error")).Once()
 	ctx := context.Background()
-	am, err := newAnalyzeMeta(ctx, catalog)
+	am, err := NewAnalyzeMeta(ctx, catalog)
 	s.Error(err)
 	s.Nil(am)
 
@@ -191,7 +191,7 @@ func (s *AnalyzeMetaSuite) Test_failCase() {
 			State:        indexpb.JobState_JobStateFinished,
 		},
 	}, nil)
-	am, err = newAnalyzeMeta(ctx, catalog)
+	am, err = NewAnalyzeMeta(ctx, catalog)
 	s.NoError(err)
 	s.NotNil(am)
 	s.Equal(2, len(am.GetAllTasks()))

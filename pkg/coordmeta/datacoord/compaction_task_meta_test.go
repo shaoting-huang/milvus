@@ -18,14 +18,14 @@ package datacoord
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/milvus-io/milvus/internal/json"
-	"github.com/milvus-io/milvus/internal/metastore/mocks"
+	"github.com/milvus-io/milvus/pkg/v3/metastore/mocks"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/util/metricsinfo"
 )
@@ -37,7 +37,7 @@ func TestCompactionTaskMetaSuite(t *testing.T) {
 type CompactionTaskMetaSuite struct {
 	suite.Suite
 	catalog *mocks.DataCoordCatalog
-	meta    *compactionTaskMeta
+	meta    *CompactionTaskMeta
 }
 
 func (suite *CompactionTaskMetaSuite) SetupTest() {
@@ -45,16 +45,16 @@ func (suite *CompactionTaskMetaSuite) SetupTest() {
 	catalog.EXPECT().ListCompactionTask(mock.Anything).Return(nil, nil)
 	catalog.EXPECT().SaveCompactionTask(mock.Anything, mock.Anything).Return(nil).Maybe()
 	suite.catalog = catalog
-	meta, err := newCompactionTaskMeta(context.TODO(), catalog)
+	meta, err := NewCompactionTaskMeta(context.TODO(), catalog)
 	suite.NoError(err)
 	suite.meta = meta
 }
 
-func newTestCompactionTaskMeta(t *testing.T) *compactionTaskMeta {
+func newTestCompactionTaskMeta(t *testing.T) *CompactionTaskMeta {
 	catalog := mocks.NewDataCoordCatalog(t)
 	catalog.EXPECT().ListCompactionTask(mock.Anything).Return(nil, nil).Maybe()
 	catalog.EXPECT().SaveCompactionTask(mock.Anything, mock.Anything).Return(nil).Maybe()
-	meta, _ := newCompactionTaskMeta(context.TODO(), catalog)
+	meta, _ := NewCompactionTaskMeta(context.TODO(), catalog)
 	return meta
 }
 
@@ -154,7 +154,7 @@ func (suite *CompactionTaskMetaSuite) TestReloadFromKV_PreAllocatedSegmentIDsCom
 	catalog := mocks.NewDataCoordCatalog(suite.T())
 	catalog.EXPECT().ListCompactionTask(mock.Anything).Return([]*datapb.CompactionTask{l0Task, clusteringTask}, nil).Once()
 
-	meta, err := newCompactionTaskMeta(context.TODO(), catalog)
+	meta, err := NewCompactionTaskMeta(context.TODO(), catalog)
 	suite.NoError(err)
 
 	l0Tasks := meta.GetCompactionTasksByTriggerID(1)
@@ -179,7 +179,7 @@ func (suite *CompactionTaskMetaSuite) TestReloadFromKV_BumpSchemaVersionTaskSurv
 	catalog := mocks.NewDataCoordCatalog(suite.T())
 	catalog.EXPECT().ListCompactionTask(mock.Anything).Return([]*datapb.CompactionTask{bumpSchemaVersionTask}, nil).Once()
 
-	meta, err := newCompactionTaskMeta(context.TODO(), catalog)
+	meta, err := NewCompactionTaskMeta(context.TODO(), catalog)
 	suite.NoError(err)
 
 	tasks := meta.GetCompactionTasksByTriggerID(10)

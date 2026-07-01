@@ -14,18 +14,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package model
+package datacoord
 
-import pkgmodel "github.com/milvus-io/milvus/pkg/v3/metastore/model"
+import (
+	"context"
+	"testing"
 
-// Index and its (un)marshal/clone helpers moved into the shared pkg/v3 module so
-// the DataCoordCatalog interface (which references them) can live in pkg/v3 too.
-// These aliases keep the ~70 internal call sites (model.Index, model.CloneIndex,
-// …) compiling unchanged.
-type Index = pkgmodel.Index
+	"github.com/stretchr/testify/mock"
 
-var (
-	UnmarshalIndexModel = pkgmodel.UnmarshalIndexModel
-	MarshalIndexModel   = pkgmodel.MarshalIndexModel
-	CloneIndex          = pkgmodel.CloneIndex
+	"github.com/milvus-io/milvus/internal/metastore/mocks"
 )
+
+// newTestCompactionTaskMeta builds a compactionTaskMeta backed by a permissive
+// mock catalog. The compaction-leaf manager moved into
+// pkg/v3/coordmeta/datacoord (taking its own test helper with it); this copy
+// keeps the compaction-policy tests that stay in internal/datacoord working.
+func newTestCompactionTaskMeta(t *testing.T) *compactionTaskMeta {
+	catalog := mocks.NewDataCoordCatalog(t)
+	catalog.EXPECT().ListCompactionTask(mock.Anything).Return(nil, nil).Maybe()
+	catalog.EXPECT().SaveCompactionTask(mock.Anything, mock.Anything).Return(nil).Maybe()
+	meta, _ := newCompactionTaskMeta(context.TODO(), catalog)
+	return meta
+}
