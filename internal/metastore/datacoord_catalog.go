@@ -1,19 +1,3 @@
-// Licensed to the LF AI & Data foundation under one
-// or more contributor license agreements. See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership. The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License. You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 package metastore
 
 import (
@@ -21,31 +5,12 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus/internal/metastore/model"
-	pkgmetastore "github.com/milvus-io/milvus/pkg/v3/metastore"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
-	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
-	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
-)
-
-// RootCoordCatalog + AlterType were moved to the shared pkg/v3/metastore module
-// (so the pooled catalog service can depend on the rootcoord contract); they are
-// re-exported here to keep the internal import path working unchanged. The other
-// coord *Catalog contracts stay defined here until each coord's own move.
-type (
-	RootCoordCatalog = pkgmetastore.RootCoordCatalog
-	AlterType        = pkgmetastore.AlterType
-)
-
-const (
-	ADD    = pkgmetastore.ADD
-	DELETE = pkgmetastore.DELETE
-	MODIFY = pkgmetastore.MODIFY
 )
 
 type BinlogsIncrement struct {
@@ -190,103 +155,4 @@ type DataCoordCatalog interface {
 	SaveSnapshot(ctx context.Context, snapshot *datapb.SnapshotInfo) error
 	DropSnapshot(ctx context.Context, collectionID int64, snapshotID int64) error
 	ListSnapshots(ctx context.Context) ([]*datapb.SnapshotInfo, error)
-}
-
-type QueryCoordCatalog interface {
-	SaveCollection(ctx context.Context, collection *querypb.CollectionLoadInfo, partitions ...*querypb.PartitionLoadInfo) error
-	SavePartition(ctx context.Context, info ...*querypb.PartitionLoadInfo) error
-	SaveReplica(ctx context.Context, replicas ...*querypb.Replica) error
-	GetCollections(ctx context.Context) ([]*querypb.CollectionLoadInfo, error)
-	GetPartitions(ctx context.Context, collectionIDs []int64) (map[int64][]*querypb.PartitionLoadInfo, error)
-	GetReplicas(ctx context.Context) ([]*querypb.Replica, error)
-	ReleaseCollection(ctx context.Context, collection int64) error
-	ReleasePartition(ctx context.Context, collection int64, partitions ...int64) error
-	ReleaseReplicas(ctx context.Context, collectionID int64) error
-	ReleaseReplica(ctx context.Context, collection int64, replicas ...int64) error
-	SaveResourceGroup(ctx context.Context, rgs ...*querypb.ResourceGroup) error
-	RemoveResourceGroup(ctx context.Context, rgName string) error
-	GetResourceGroups(ctx context.Context) ([]*querypb.ResourceGroup, error)
-
-	SaveCollectionTargets(ctx context.Context, target ...*querypb.CollectionTarget) error
-	RemoveCollectionTarget(ctx context.Context, collectionID int64) error
-	RemoveCollectionTargets(ctx context.Context) error
-	GetCollectionTargets(ctx context.Context) (map[int64]*querypb.CollectionTarget, error)
-}
-
-// StreamingCoordCataLog is the interface for streamingcoord catalog
-// All write operation of catalog is reliable, the error will only be returned if the ctx is canceled,
-// otherwise it will retry until success.
-type StreamingCoordCataLog interface {
-	// GetCChannel get the control channel from metastore.
-	GetCChannel(ctx context.Context) (*streamingpb.CChannelMeta, error)
-
-	// SaveCChannel save the control channel to metastore.
-	// Only return error if the ctx is canceled, otherwise it will retry until success.
-	SaveCChannel(ctx context.Context, info *streamingpb.CChannelMeta) error
-
-	// GetVersion get the streaming version from metastore.
-	GetVersion(ctx context.Context) (*streamingpb.StreamingVersion, error)
-
-	// SaveVersion save the streaming version to metastore.
-	// Only return error if the ctx is canceled, otherwise it will retry until success.
-	SaveVersion(ctx context.Context, version *streamingpb.StreamingVersion) error
-
-	// physical channel watch related
-
-	// ListPChannel list all pchannels on milvus.
-	ListPChannel(ctx context.Context) ([]*streamingpb.PChannelMeta, error)
-
-	// SavePChannel save a pchannel info to metastore.
-	// Only return error if the ctx is canceled, otherwise it will retry until success.
-	SavePChannels(ctx context.Context, info []*streamingpb.PChannelMeta) error
-
-	// ListBroadcastTask list all broadcast tasks.
-	// Used to recovery the broadcast tasks.
-	ListBroadcastTask(ctx context.Context) ([]*streamingpb.BroadcastTask, error)
-
-	// SaveBroadcastTask save the broadcast task to metastore.
-	// Make the task recoverable after restart.
-	// When broadcast task is done, it will be removed from metastore.
-	// Only return error if the ctx is canceled, otherwise it will retry until success.
-	SaveBroadcastTask(ctx context.Context, broadcastID uint64, task *streamingpb.BroadcastTask) error
-
-	// SaveReplicateConfiguration saves the replicate configuration to metastore.
-	// Only return error if the ctx is canceled, otherwise it will retry until success.
-	SaveReplicateConfiguration(ctx context.Context, config *streamingpb.ReplicateConfigurationMeta, replicatingTasks []*streamingpb.ReplicatePChannelMeta) error
-
-	// GetReplicateConfiguration gets the replicate configuration from metastore.
-	GetReplicateConfiguration(ctx context.Context) (*streamingpb.ReplicateConfigurationMeta, error)
-}
-
-// StreamingNodeCataLog is the interface for streamingnode catalog
-type StreamingNodeCataLog interface {
-	// WAL select the wal related recovery infos.
-	// Which must give the pchannel name.
-
-	// ListVChannel list all vchannels on current pchannel.
-	ListVChannel(ctx context.Context, pchannelName string) ([]*streamingpb.VChannelMeta, error)
-
-	// SaveVChannels save vchannel on current pchannel.
-	SaveVChannels(ctx context.Context, pchannelName string, vchannels map[string]*streamingpb.VChannelMeta) error
-
-	// ListSegmentAssignment list all segment assignments for the wal.
-	ListSegmentAssignment(ctx context.Context, pChannelName string) ([]*streamingpb.SegmentAssignmentMeta, error)
-
-	// SaveSegmentAssignments save the segment assignments for the wal.
-	SaveSegmentAssignments(ctx context.Context, pChannelName string, infos map[int64]*streamingpb.SegmentAssignmentMeta) error
-
-	// GetConsumeCheckpoint gets the consuming checkpoint of the wal.
-	// Return nil, nil if the checkpoint is not exist.
-	GetConsumeCheckpoint(ctx context.Context, pChannelName string) (*streamingpb.WALCheckpoint, error)
-
-	// SaveConsumeCheckpoint saves the consuming checkpoint of the wal.
-	SaveConsumeCheckpoint(ctx context.Context, pChannelName string, checkpoint *streamingpb.WALCheckpoint) error
-
-	// SaveSalvageCheckpoint saves the salvage checkpoint.
-	// The checkpoint is captured during force promote.
-	SaveSalvageCheckpoint(ctx context.Context, pChannelName string, checkpoint *commonpb.ReplicateCheckpoint) error
-
-	// GetSalvageCheckpoint gets all salvage checkpoints for a channel.
-	// Returns an empty slice if none exist. One checkpoint per source cluster.
-	GetSalvageCheckpoint(ctx context.Context, pChannelName string) ([]*commonpb.ReplicateCheckpoint, error)
 }
