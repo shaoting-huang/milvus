@@ -5,18 +5,19 @@ import (
 	"testing"
 
 	"github.com/cockroachdb/errors"
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
-	etcdkv "github.com/milvus-io/milvus/internal/kv/etcd"
-	"github.com/milvus-io/milvus/internal/kv/mocks"
-	kvfactory "github.com/milvus-io/milvus/internal/util/dependency/kv"
+	etcdkv "github.com/milvus-io/milvus/pkg/v3/kv/etcd"
+	"github.com/milvus-io/milvus/pkg/v3/kv/mocks"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/etcd"
+	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
 
 func TestCatalogConsumeCheckpoint(t *testing.T) {
@@ -85,9 +86,23 @@ func TestCatalogSegmentAssignments(t *testing.T) {
 }
 
 func TestCatalogVChannel(t *testing.T) {
-	etcdCli, _ := kvfactory.GetEtcdAndPath()
-	rootPath := "testCatalogVChannel-" + uuid.New().String() + "/meta"
+	paramtable.Init()
+	config := &paramtable.Get().EtcdCfg
+	etcdCli, err := etcd.GetEtcdClient(
+		config.UseEmbedEtcd.GetAsBool(),
+		config.EtcdUseSSL.GetAsBool(),
+		config.Endpoints.GetAsStrings(),
+		config.EtcdTLSCert.GetValue(),
+		config.EtcdTLSKey.GetValue(),
+		config.EtcdTLSCACert.GetValue(),
+		config.EtcdTLSMinVersion.GetValue())
+	assert.NoError(t, err)
+	rootPath := "testCatalogVChannel-" + funcutil.RandomString(8) + "/meta"
 	kv := etcdkv.NewEtcdKV(etcdCli, rootPath)
+	defer func() {
+		kv.RemoveWithPrefix(context.Background(), "")
+		kv.Close()
+	}()
 	catalog := NewCataLog(kv)
 	ctx := context.Background()
 
