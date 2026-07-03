@@ -1,4 +1,4 @@
-package meta
+package querycoord
 
 import (
 	"testing"
@@ -7,8 +7,6 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/rgpb"
-	"github.com/milvus-io/milvus/internal/querycoordv2/session"
-	"github.com/milvus-io/milvus/internal/util/sessionutil"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
@@ -29,7 +27,7 @@ func TestResourceGroup(t *testing.T) {
 		}},
 	}
 
-	nodeMgr := session.NewNodeManager()
+	nodeMgr := newFakeNodeManager()
 
 	rg := NewResourceGroup("rg1", cfg, nodeMgr)
 	cfg2 := rg.GetConfig()
@@ -91,7 +89,7 @@ func TestResourceGroup(t *testing.T) {
 	}
 	assertion()
 
-	nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+	nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 		NodeID: 1,
 	}))
 	// Test AddNode
@@ -118,7 +116,7 @@ func TestResourceGroup(t *testing.T) {
 	}
 	assertion()
 
-	nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+	nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 		NodeID: 2,
 	}))
 	// Test AddNode until meet requirement.
@@ -145,10 +143,10 @@ func TestResourceGroup(t *testing.T) {
 	}
 	assertion()
 
-	nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+	nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 		NodeID: 3,
 	}))
-	nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+	nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 		NodeID: 4,
 	}))
 	// Test AddNode until exceed requirement.
@@ -221,12 +219,12 @@ func TestResourceGroup(t *testing.T) {
 }
 
 func TestResourceGroupMeta(t *testing.T) {
-	nodeMgr := session.NewNodeManager()
+	nodeMgr := newFakeNodeManager()
 
-	nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+	nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 		NodeID: 1,
 	}))
-	nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+	nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 		NodeID: 2,
 	}))
 
@@ -253,7 +251,7 @@ func TestResourceGroupMeta(t *testing.T) {
 	assert.False(t, rg.ContainNode(4))
 	assert.Error(t, rg.MeetRequirement())
 
-	nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+	nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 		NodeID: 4,
 	}))
 	rgMeta = &querypb.ResourceGroup{
@@ -365,7 +363,7 @@ func TestResourceGroupMeta(t *testing.T) {
 }
 
 func TestRGNodeFilter(t *testing.T) {
-	nodeMgr := session.NewNodeManager()
+	nodeMgr := newFakeNodeManager()
 
 	rg := NewResourceGroup("rg1", &rgpb.ResourceGroupConfig{
 		Requests: &rgpb.ResourceGroupLimit{
@@ -386,19 +384,19 @@ func TestRGNodeFilter(t *testing.T) {
 
 	rg.nodes = typeutil.NewSet[int64](1, 2, 3)
 
-	nodeInfo1 := session.NewNodeInfo(session.ImmutableNodeInfo{
+	nodeInfo1 := newFakeNodeInfo(fakeImmutableNodeInfo{
 		NodeID: 1,
 		Labels: map[string]string{
 			"dc_name": "dc1",
 		},
 	})
-	nodeInfo2 := session.NewNodeInfo(session.ImmutableNodeInfo{
+	nodeInfo2 := newFakeNodeInfo(fakeImmutableNodeInfo{
 		NodeID: 2,
 		Labels: map[string]string{
 			"dc_name": "dc1",
 		},
 	})
-	nodeInfo3 := session.NewNodeInfo(session.ImmutableNodeInfo{
+	nodeInfo3 := newFakeNodeInfo(fakeImmutableNodeInfo{
 		NodeID: 3,
 		Labels: map[string]string{
 			"dc_name": "dc2",
@@ -454,19 +452,19 @@ func TestRGNodeFilter(t *testing.T) {
 }
 
 func TestRGAcceptNode(t *testing.T) {
-	nodeMgr := session.NewNodeManager()
+	nodeMgr := newFakeNodeManager()
 
-	nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+	nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 		NodeID: 1,
 		Labels: map[string]string{
-			sessionutil.LabelResourceGroup: "rg1",
+			labelResourceGroup: "rg1",
 		},
 	}))
 
-	nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+	nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 		NodeID: 2,
 		Labels: map[string]string{
-			sessionutil.LabelResourceGroup: "rg2",
+			labelResourceGroup: "rg2",
 		},
 	}))
 

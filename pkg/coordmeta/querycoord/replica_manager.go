@@ -14,10 +14,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package meta
+package querycoord
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"time"
@@ -26,8 +27,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
-	"github.com/milvus-io/milvus/internal/json"
-	"github.com/milvus-io/milvus/internal/metastore"
+	"github.com/milvus-io/milvus/pkg/v3/metastore"
 	"github.com/milvus-io/milvus/pkg/v3/metrics"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
@@ -67,7 +67,7 @@ type ReplicaManagerInterface interface {
 
 	// Metadata access
 	GetResourceGroupByCollection(ctx context.Context, collection typeutil.UniqueID) typeutil.Set[string]
-	GetReplicasJSON(ctx context.Context, meta *Meta) string
+	GetReplicasJSON(ctx context.Context, provider ReplicaCollectionProvider) string
 }
 
 // Add the interface implementation assertion
@@ -823,7 +823,7 @@ func (m *ReplicaManager) GetResourceGroupByCollection(ctx context.Context, colle
 }
 
 // GetReplicasJSON returns a JSON representation of all replicas managed by the ReplicaManager.
-func (m *ReplicaManager) GetReplicasJSON(ctx context.Context, meta *Meta) string {
+func (m *ReplicaManager) GetReplicasJSON(ctx context.Context, provider ReplicaCollectionProvider) string {
 	allReplicas := make([]*metricsinfo.Replica, 0)
 	m.coll2Replicas.Range(func(_ int64, collReplicas []*Replica) bool {
 		for _, r := range collReplicas {
@@ -832,7 +832,7 @@ func (m *ReplicaManager) GetReplicasJSON(ctx context.Context, meta *Meta) string
 				channelTowRWNodes[k] = v.GetRwNodes()
 			}
 
-			collectionInfo := meta.GetCollection(ctx, r.GetCollectionID())
+			collectionInfo := provider.GetCollection(ctx, r.GetCollectionID())
 			dbID := util.InvalidDBID
 			if collectionInfo == nil {
 				mlog.Warn(ctx, "failed to get collection info", mlog.FieldCollectionID(r.GetCollectionID()))

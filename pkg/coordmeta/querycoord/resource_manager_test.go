@@ -13,28 +13,19 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package meta
+package querycoord
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/rgpb"
-	"github.com/milvus-io/milvus/internal/json"
-	etcdkv "github.com/milvus-io/milvus/internal/kv/etcd"
-	"github.com/milvus-io/milvus/internal/kv/mocks"
-	"github.com/milvus-io/milvus/internal/metastore/kv/querycoord"
-	"github.com/milvus-io/milvus/internal/querycoordv2/params"
-	"github.com/milvus-io/milvus/internal/querycoordv2/session"
-	"github.com/milvus-io/milvus/internal/util/sessionutil"
-	"github.com/milvus-io/milvus/pkg/v3/kv"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
-	"github.com/milvus-io/milvus/pkg/v3/util/etcd"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/metricsinfo"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
@@ -44,7 +35,8 @@ import (
 type ResourceManagerSuite struct {
 	suite.Suite
 
-	kv      kv.MetaKv
+	nodeMgr *fakeNodeManager
+	catalog *fakeCatalog
 	manager *ResourceManager
 	ctx     context.Context
 }
@@ -54,25 +46,10 @@ func (suite *ResourceManagerSuite) SetupSuite() {
 }
 
 func (suite *ResourceManagerSuite) SetupTest() {
-	config := params.GenerateEtcdConfig()
-	cli, err := etcd.GetEtcdClient(
-		config.UseEmbedEtcd.GetAsBool(),
-		config.EtcdUseSSL.GetAsBool(),
-		config.Endpoints.GetAsStrings(),
-		config.EtcdTLSCert.GetValue(),
-		config.EtcdTLSKey.GetValue(),
-		config.EtcdTLSCACert.GetValue(),
-		config.EtcdTLSMinVersion.GetValue())
-	suite.Require().NoError(err)
-	suite.kv = etcdkv.NewEtcdKV(cli, config.MetaRootPath.GetValue())
-
-	store := querycoord.NewCatalog(suite.kv)
-	suite.manager = NewResourceManager(store, session.NewNodeManager())
+	suite.nodeMgr = newFakeNodeManager()
+	suite.catalog = newFakeCatalog()
+	suite.manager = NewResourceManager(suite.catalog, suite.nodeMgr)
 	suite.ctx = context.Background()
-}
-
-func (suite *ResourceManagerSuite) TearDownSuite() {
-	suite.kv.Close()
 }
 
 func TestResourceManager(t *testing.T) {
@@ -207,12 +184,12 @@ func (suite *ResourceManagerSuite) TestManipulateResourceGroup() {
 	// assign a node to rg.
 	_, err = suite.manager.AddResourceGroup(ctx, "rg2", newResourceGroupConfig(1, 1))
 	suite.NoError(err)
-	suite.manager.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+	suite.nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 		NodeID:   1,
 		Address:  "localhost",
 		Hostname: "localhost",
 	}))
-	defer suite.manager.nodeMgr.Remove(1)
+	defer suite.nodeMgr.Remove(1)
 	suite.manager.HandleNodeUp(ctx, 1)
 	err = suite.manager.RemoveResourceGroup(ctx, "rg2")
 	suite.ErrorIs(err, merr.ErrParameterInvalid)
@@ -224,22 +201,22 @@ func (suite *ResourceManagerSuite) TestManipulateResourceGroup() {
 	err = suite.manager.RemoveResourceGroup(ctx, "rg2")
 	suite.NoError(err)
 
-	suite.manager.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+	suite.nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 		NodeID:   10,
 		Address:  "localhost",
 		Hostname: "localhost",
 		Labels: map[string]string{
-			sessionutil.LabelStreamingNodeEmbeddedQueryNode: "1",
+			labelStreamingNodeEmbeddedQueryNode: "1",
 		},
 	}))
 	suite.manager.HandleNodeUp(ctx, 10)
 
-	suite.manager.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+	suite.nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 		NodeID:   11,
 		Address:  "localhost",
 		Hostname: "localhost",
 		Labels: map[string]string{
-			sessionutil.LabelResourceGroup: "rg11",
+			labelResourceGroup: "rg11",
 		},
 	}))
 	suite.manager.HandleNodeUp(ctx, 11)
@@ -248,7 +225,7 @@ func (suite *ResourceManagerSuite) TestManipulateResourceGroup() {
 
 func (suite *ResourceManagerSuite) TestNodeUpAndDown() {
 	ctx := suite.ctx
-	suite.manager.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+	suite.nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 		NodeID:   1,
 		Address:  "localhost",
 		Hostname: "localhost",
@@ -299,22 +276,22 @@ func (suite *ResourceManagerSuite) TestNodeUpAndDown() {
 	suite.manager.AddResourceGroup(ctx, "rg2", newResourceGroupConfig(1, 1))
 	suite.NoError(err)
 
-	suite.manager.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+	suite.nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 		NodeID:   11,
 		Address:  "localhost",
 		Hostname: "localhost",
 	}))
-	suite.manager.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+	suite.nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 		NodeID:   12,
 		Address:  "localhost",
 		Hostname: "localhost",
 	}))
-	suite.manager.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+	suite.nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 		NodeID:   13,
 		Address:  "localhost",
 		Hostname: "localhost",
 	}))
-	suite.manager.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+	suite.nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 		NodeID:   14,
 		Address:  "localhost",
 		Hostname: "localhost",
@@ -346,7 +323,7 @@ func (suite *ResourceManagerSuite) TestNodeUpAndDown() {
 		"rg2": newResourceGroupConfig(30, 40),
 	})
 	for i := 1; i <= 100; i++ {
-		suite.manager.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+		suite.nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 			NodeID:   int64(i),
 			Address:  "localhost",
 			Hostname: "localhost",
@@ -384,7 +361,7 @@ func (suite *ResourceManagerSuite) TestNodeUpAndDown() {
 func (suite *ResourceManagerSuite) TestAutoRecover() {
 	ctx := suite.ctx
 	for i := 1; i <= 100; i++ {
-		suite.manager.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+		suite.nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 			NodeID:   int64(i),
 			Address:  "localhost",
 			Hostname: "localhost",
@@ -619,7 +596,7 @@ func (suite *ResourceManagerSuite) testTransferNode() {
 
 func (suite *ResourceManagerSuite) TestIncomingNode() {
 	ctx := suite.ctx
-	suite.manager.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+	suite.nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 		NodeID:   1,
 		Address:  "localhost",
 		Hostname: "localhost",
@@ -636,26 +613,20 @@ func (suite *ResourceManagerSuite) TestIncomingNode() {
 
 func (suite *ResourceManagerSuite) TestUnassignFail() {
 	ctx := suite.ctx
-	// suite.man
-	mockKV := mocks.NewMetaKv(suite.T())
-	mockKV.EXPECT().MultiSave(mock.Anything, mock.Anything).Return(nil)
-
-	store := querycoord.NewCatalog(mockKV)
-	suite.manager = NewResourceManager(store, session.NewNodeManager())
 
 	suite.manager.AlterResourceGroups(ctx, map[string]*rgpb.ResourceGroupConfig{
 		"rg1": newResourceGroupConfig(20, 30),
 	})
 
-	suite.manager.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+	suite.nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 		NodeID:   1,
 		Address:  "localhost",
 		Hostname: "localhost",
 	}))
 	suite.manager.HandleNodeUp(ctx, 1)
 
-	mockKV.EXPECT().MultiSave(mock.Anything, mock.Anything).Unset()
-	mockKV.EXPECT().MultiSave(mock.Anything, mock.Anything).Return(merr.WrapErrServiceInternal("mocked")).Once()
+	// The next resource-group persistence fails; unassignNode should fatal/panic.
+	suite.catalog.saveResourceGroupErr = merr.WrapErrServiceInternal("mocked")
 
 	suite.Panics(func() {
 		suite.manager.HandleNodeDown(ctx, 1)
@@ -664,7 +635,7 @@ func (suite *ResourceManagerSuite) TestUnassignFail() {
 
 func TestGetResourceGroupsJSON(t *testing.T) {
 	ctx := context.Background()
-	nodeManager := session.NewNodeManager()
+	nodeManager := newFakeNodeManager()
 	manager := &ResourceManager{groups: make(map[string]*ResourceGroup)}
 	rg1 := NewResourceGroup("rg1", newResourceGroupConfig(0, 10), nodeManager)
 	rg1.nodes = typeutil.NewUniqueSet(1, 2)
@@ -750,7 +721,7 @@ func (suite *ResourceManagerSuite) TestNodeLabels_NodeAssign() {
 
 	// test that all query nodes has been marked label1
 	for i := 1; i <= 30; i++ {
-		suite.manager.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+		suite.nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 			NodeID:   int64(i),
 			Address:  "localhost",
 			Hostname: "localhost",
@@ -767,7 +738,7 @@ func (suite *ResourceManagerSuite) TestNodeLabels_NodeAssign() {
 
 	// test new querynode with label2
 	for i := 31; i <= 40; i++ {
-		suite.manager.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+		suite.nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 			NodeID:   int64(i),
 			Address:  "localhost",
 			Hostname: "localhost",
@@ -783,12 +754,12 @@ func (suite *ResourceManagerSuite) TestNodeLabels_NodeAssign() {
 	suite.Equal(20, suite.manager.GetResourceGroup(ctx, DefaultResourceGroupName).NodeNum())
 	nodesInRG, _ := suite.manager.GetNodes(ctx, "rg2")
 	for _, node := range nodesInRG {
-		suite.Equal("label2", suite.manager.nodeMgr.Get(node).Labels()["dc_name"])
+		suite.Equal("label2", suite.nodeMgr.Get(node).Labels()["dc_name"])
 	}
 
 	// test new querynode with label3
 	for i := 41; i <= 50; i++ {
-		suite.manager.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+		suite.nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 			NodeID:   int64(i),
 			Address:  "localhost",
 			Hostname: "localhost",
@@ -804,7 +775,7 @@ func (suite *ResourceManagerSuite) TestNodeLabels_NodeAssign() {
 	suite.Equal(20, suite.manager.GetResourceGroup(ctx, DefaultResourceGroupName).NodeNum())
 	nodesInRG, _ = suite.manager.GetNodes(ctx, "rg3")
 	for _, node := range nodesInRG {
-		suite.Equal("label3", suite.manager.nodeMgr.Get(node).Labels()["dc_name"])
+		suite.Equal("label3", suite.nodeMgr.Get(node).Labels()["dc_name"])
 	}
 
 	// test swap rg's label
@@ -872,17 +843,17 @@ func (suite *ResourceManagerSuite) TestNodeLabels_NodeAssign() {
 	suite.Equal(20, suite.manager.GetResourceGroup(ctx, DefaultResourceGroupName).NodeNum())
 	nodesInRG, _ = suite.manager.GetNodes(ctx, "rg1")
 	for _, node := range nodesInRG {
-		suite.Equal("label2", suite.manager.nodeMgr.Get(node).Labels()["dc_name"])
+		suite.Equal("label2", suite.nodeMgr.Get(node).Labels()["dc_name"])
 	}
 
 	nodesInRG, _ = suite.manager.GetNodes(ctx, "rg2")
 	for _, node := range nodesInRG {
-		suite.Equal("label3", suite.manager.nodeMgr.Get(node).Labels()["dc_name"])
+		suite.Equal("label3", suite.nodeMgr.Get(node).Labels()["dc_name"])
 	}
 
 	nodesInRG, _ = suite.manager.GetNodes(ctx, "rg3")
 	for _, node := range nodesInRG {
-		suite.Equal("label1", suite.manager.nodeMgr.Get(node).Labels()["dc_name"])
+		suite.Equal("label1", suite.nodeMgr.Get(node).Labels()["dc_name"])
 	}
 }
 
@@ -941,7 +912,7 @@ func (suite *ResourceManagerSuite) TestNodeLabels_NodeDown() {
 
 	// test that all query nodes has been marked label1
 	for i := 1; i <= 10; i++ {
-		suite.manager.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+		suite.nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 			NodeID:   int64(i),
 			Address:  "localhost",
 			Hostname: "localhost",
@@ -954,7 +925,7 @@ func (suite *ResourceManagerSuite) TestNodeLabels_NodeDown() {
 
 	// test new querynode with label2
 	for i := 31; i <= 40; i++ {
-		suite.manager.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+		suite.nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 			NodeID:   int64(i),
 			Address:  "localhost",
 			Hostname: "localhost",
@@ -966,7 +937,7 @@ func (suite *ResourceManagerSuite) TestNodeLabels_NodeDown() {
 	}
 	// test new querynode with label3
 	for i := 41; i <= 50; i++ {
-		suite.manager.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+		suite.nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 			NodeID:   int64(i),
 			Address:  "localhost",
 			Hostname: "localhost",
@@ -982,13 +953,13 @@ func (suite *ResourceManagerSuite) TestNodeLabels_NodeDown() {
 
 	// test node down with label1
 	suite.manager.HandleNodeDown(ctx, int64(1))
-	suite.manager.nodeMgr.Remove(int64(1))
+	suite.nodeMgr.Remove(int64(1))
 	suite.Equal(9, suite.manager.GetResourceGroup(ctx, "rg1").NodeNum())
 	suite.Equal(10, suite.manager.GetResourceGroup(ctx, "rg2").NodeNum())
 	suite.Equal(10, suite.manager.GetResourceGroup(ctx, "rg3").NodeNum())
 
 	// test node up with label2
-	suite.manager.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+	suite.nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 		NodeID:   int64(101),
 		Address:  "localhost",
 		Hostname: "localhost",
@@ -1003,7 +974,7 @@ func (suite *ResourceManagerSuite) TestNodeLabels_NodeDown() {
 	suite.Equal(1, suite.manager.GetResourceGroup(ctx, DefaultResourceGroupName).NodeNum())
 
 	// test node up with label1
-	suite.manager.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+	suite.nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 		NodeID:   int64(102),
 		Address:  "localhost",
 		Hostname: "localhost",
@@ -1018,7 +989,7 @@ func (suite *ResourceManagerSuite) TestNodeLabels_NodeDown() {
 	suite.Equal(1, suite.manager.GetResourceGroup(ctx, DefaultResourceGroupName).NodeNum())
 	nodesInRG, _ := suite.manager.GetNodes(ctx, "rg1")
 	for _, node := range nodesInRG {
-		suite.Equal("label1", suite.manager.nodeMgr.Get(node).Labels()["dc_name"])
+		suite.Equal("label1", suite.nodeMgr.Get(node).Labels()["dc_name"])
 	}
 
 	suite.manager.AutoRecoverResourceGroup(ctx, "rg1")
@@ -1027,40 +998,32 @@ func (suite *ResourceManagerSuite) TestNodeLabels_NodeDown() {
 	suite.manager.AutoRecoverResourceGroup(ctx, DefaultResourceGroupName)
 	nodesInRG, _ = suite.manager.GetNodes(ctx, DefaultResourceGroupName)
 	for _, node := range nodesInRG {
-		suite.Equal("label2", suite.manager.nodeMgr.Get(node).Labels()["dc_name"])
+		suite.Equal("label2", suite.nodeMgr.Get(node).Labels()["dc_name"])
 	}
 }
 
-// createTestResourceManager creates a ResourceManager for testing
-func createTestResourceManager(t *testing.T) *ResourceManager {
-	// Create a mock catalog
-	mockCatalog := &mocks.MetaKv{}
-	mockCatalog.On("MultiSave", mock.Anything, mock.Anything).Return(nil)
-
-	// Create a mock node manager
-	nodeMgr := session.NewNodeManager()
-
-	// Create resource manager
-	store := querycoord.NewCatalog(mockCatalog)
-	manager := NewResourceManager(store, nodeMgr)
-
-	return manager
+// createTestResourceManager creates a ResourceManager for testing, returning the
+// in-memory node manager so the caller can add/remove live nodes.
+func createTestResourceManager(_ *testing.T) (*ResourceManager, *fakeNodeManager) {
+	nodeMgr := newFakeNodeManager()
+	manager := NewResourceManager(newFakeCatalog(), nodeMgr)
+	return manager, nodeMgr
 }
 
 // TestResourceManager_handleNodeUp tests the private handleNodeUp method
 func TestResourceManager_handleNodeUp(t *testing.T) {
 	// Arrange
-	manager := createTestResourceManager(t)
+	manager, nodeMgr := createTestResourceManager(t)
 	ctx := context.Background()
 	nodeID := int64(1001)
 
 	// Add node to node manager
-	nodeInfo := session.NewNodeInfo(session.ImmutableNodeInfo{
+	nodeInfo := newFakeNodeInfo(fakeImmutableNodeInfo{
 		NodeID:   nodeID,
 		Address:  "localhost",
 		Hostname: "localhost",
 	})
-	manager.nodeMgr.Add(nodeInfo)
+	nodeMgr.Add(nodeInfo)
 
 	// Act
 	manager.handleNodeUp(ctx, nodeID)
@@ -1078,17 +1041,17 @@ func TestResourceManager_handleNodeUp(t *testing.T) {
 // TestResourceManager_handleNodeDown tests the private handleNodeDown method
 func TestResourceManager_handleNodeDown(t *testing.T) {
 	// Arrange
-	manager := createTestResourceManager(t)
+	manager, nodeMgr := createTestResourceManager(t)
 	ctx := context.Background()
 	nodeID := int64(1002)
 
 	// Add node to node manager
-	nodeInfo := session.NewNodeInfo(session.ImmutableNodeInfo{
+	nodeInfo := newFakeNodeInfo(fakeImmutableNodeInfo{
 		NodeID:   nodeID,
 		Address:  "localhost",
 		Hostname: "localhost",
 	})
-	manager.nodeMgr.Add(nodeInfo)
+	nodeMgr.Add(nodeInfo)
 
 	// Add node to incoming set and assign it to a resource group first
 	manager.handleNodeUp(ctx, nodeID)
@@ -1115,17 +1078,17 @@ func TestResourceManager_handleNodeDown(t *testing.T) {
 // TestResourceManager_handleNodeStopping tests the private handleNodeStopping method
 func TestResourceManager_handleNodeStopping(t *testing.T) {
 	// Arrange
-	manager := createTestResourceManager(t)
+	manager, nodeMgr := createTestResourceManager(t)
 	ctx := context.Background()
 	nodeID := int64(1003)
 
 	// Add node to node manager
-	nodeInfo := session.NewNodeInfo(session.ImmutableNodeInfo{
+	nodeInfo := newFakeNodeInfo(fakeImmutableNodeInfo{
 		NodeID:   nodeID,
 		Address:  "localhost",
 		Hostname: "localhost",
 	})
-	manager.nodeMgr.Add(nodeInfo)
+	nodeMgr.Add(nodeInfo)
 
 	// Add node to incoming set and assign it to a resource group first
 	manager.handleNodeUp(ctx, nodeID)
@@ -1152,30 +1115,30 @@ func TestResourceManager_handleNodeStopping(t *testing.T) {
 // TestResourceManager_CheckNodesInResourceGroup tests the CheckNodesInResourceGroup method
 func TestResourceManager_CheckNodesInResourceGroup(t *testing.T) {
 	// Arrange
-	manager := createTestResourceManager(t)
+	manager, nodeMgr := createTestResourceManager(t)
 
 	// Add some nodes to node manager
-	nodeInfo1 := session.NewNodeInfo(session.ImmutableNodeInfo{
+	nodeInfo1 := newFakeNodeInfo(fakeImmutableNodeInfo{
 		NodeID:   1001,
 		Address:  "localhost:1001",
 		Hostname: "localhost",
 	})
-	nodeInfo2 := session.NewNodeInfo(session.ImmutableNodeInfo{
+	nodeInfo2 := newFakeNodeInfo(fakeImmutableNodeInfo{
 		NodeID:   1002,
 		Address:  "localhost:1002",
 		Hostname: "localhost",
 	})
-	nodeInfo3 := session.NewNodeInfo(session.ImmutableNodeInfo{
+	nodeInfo3 := newFakeNodeInfo(fakeImmutableNodeInfo{
 		NodeID:   1003,
 		Address:  "localhost:1003",
 		Hostname: "localhost",
 	})
-	manager.nodeMgr.Add(nodeInfo1)
-	manager.nodeMgr.Add(nodeInfo2)
-	manager.nodeMgr.Add(nodeInfo3)
+	nodeMgr.Add(nodeInfo1)
+	nodeMgr.Add(nodeInfo2)
+	nodeMgr.Add(nodeInfo3)
 
 	// Set node 1002 as stopping
-	nodeInfo2.SetState(session.NodeStateStopping)
+	nodeInfo2.SetState(fakeNodeStateStopping)
 
 	// Add nodes to default resource group
 	ctx := context.Background()
@@ -1204,21 +1167,21 @@ func TestResourceManager_CheckNodesInResourceGroup(t *testing.T) {
 // TestResourceManager_CheckNodesInResourceGroup_AllNodesHealthy tests CheckNodesInResourceGroup with all healthy nodes
 func TestResourceManager_CheckNodesInResourceGroup_AllNodesHealthy(t *testing.T) {
 	// Arrange
-	manager := createTestResourceManager(t)
+	manager, nodeMgr := createTestResourceManager(t)
 
 	// Add some healthy nodes to node manager
-	nodeInfo1 := session.NewNodeInfo(session.ImmutableNodeInfo{
+	nodeInfo1 := newFakeNodeInfo(fakeImmutableNodeInfo{
 		NodeID:   1001,
 		Address:  "localhost:1001",
 		Hostname: "localhost",
 	})
-	nodeInfo2 := session.NewNodeInfo(session.ImmutableNodeInfo{
+	nodeInfo2 := newFakeNodeInfo(fakeImmutableNodeInfo{
 		NodeID:   1002,
 		Address:  "localhost:1002",
 		Hostname: "localhost",
 	})
-	manager.nodeMgr.Add(nodeInfo1)
-	manager.nodeMgr.Add(nodeInfo2)
+	nodeMgr.Add(nodeInfo1)
+	nodeMgr.Add(nodeInfo2)
 
 	// Add nodes to default resource group
 	ctx := context.Background()
@@ -1244,7 +1207,7 @@ func (suite *ResourceManagerSuite) TestTransferNodesOnRGSwap_ScaleUp() {
 	})
 	suite.manager.AddResourceGroup(ctx, "rg1", newResourceGroupConfig(0, 0))
 	for i := int64(1); i <= 3; i++ {
-		suite.manager.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+		suite.nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 			NodeID:   i,
 			Address:  "localhost",
 			Hostname: "localhost",
@@ -1273,7 +1236,7 @@ func (suite *ResourceManagerSuite) TestTransferNodesOnRGSwap_ScaleDown() {
 	// Setup: rg1(3,3) with 3 nodes, default(0,0).
 	suite.manager.AddResourceGroup(ctx, "rg1", newResourceGroupConfig(3, 3))
 	for i := int64(1); i <= 3; i++ {
-		suite.manager.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+		suite.nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 			NodeID:   i,
 			Address:  "localhost",
 			Hostname: "localhost",
@@ -1303,7 +1266,7 @@ func (suite *ResourceManagerSuite) TestTransferNodesOnRGSwap_NoMatchWhenConfigDi
 		DefaultResourceGroupName: newResourceGroupConfig(3, 3),
 	})
 	for i := int64(1); i <= 3; i++ {
-		suite.manager.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+		suite.nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 			NodeID:   i,
 			Address:  "localhost",
 			Hostname: "localhost",
@@ -1332,7 +1295,7 @@ func (suite *ResourceManagerSuite) TestTransferNodesOnRGSwap_LexOrder() {
 	suite.manager.AddResourceGroup(ctx, "rg1", newResourceGroupConfig(0, 0))
 	suite.manager.AddResourceGroup(ctx, "rg2", newResourceGroupConfig(0, 0))
 	for i := int64(1); i <= 3; i++ {
-		suite.manager.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+		suite.nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 			NodeID:   i,
 			Address:  "localhost",
 			Hostname: "localhost",
@@ -1361,7 +1324,7 @@ func (suite *ResourceManagerSuite) TestTransferNodesOnRGSwap_MultipleDonors() {
 	suite.manager.AddResourceGroup(ctx, "rg1", newResourceGroupConfig(2, 2))
 	suite.manager.AddResourceGroup(ctx, "rg2", newResourceGroupConfig(3, 3))
 	for i := int64(1); i <= 5; i++ {
-		suite.manager.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+		suite.nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 			NodeID:   i,
 			Address:  "localhost",
 			Hostname: "localhost",
@@ -1399,7 +1362,7 @@ func (suite *ResourceManagerSuite) TestTransferNodesOnRGSwap_RecipientAlreadyHas
 	})
 	suite.manager.AddResourceGroup(ctx, "rg1", newResourceGroupConfig(1, 3))
 	for i := int64(1); i <= 3; i++ {
-		suite.manager.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+		suite.nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 			NodeID:   i,
 			Address:  "localhost",
 			Hostname: "localhost",
@@ -1428,7 +1391,7 @@ func (suite *ResourceManagerSuite) TestTransferNodesOnRGSwap_NodeIDMapConsistenc
 	})
 	suite.manager.AddResourceGroup(ctx, "rg1", newResourceGroupConfig(0, 0))
 	for i := int64(1); i <= 3; i++ {
-		suite.manager.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+		suite.nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 			NodeID:   i,
 			Address:  "localhost",
 			Hostname: "localhost",
@@ -1463,7 +1426,7 @@ func (suite *ResourceManagerSuite) TestGetResourceGroups() {
 	suite.manager.AddResourceGroup(ctx, "rg1", newResourceGroupConfig(2, 2))
 	suite.manager.AddResourceGroup(ctx, "rg2", newResourceGroupConfig(3, 3))
 	for i := int64(1); i <= 5; i++ {
-		suite.manager.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+		suite.nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 			NodeID:   i,
 			Address:  "localhost",
 			Hostname: "localhost",
@@ -1494,7 +1457,7 @@ func (suite *ResourceManagerSuite) TestSetupInMemResourceGroup_NodeIDMapCleanup(
 	// Setup: rg1(2,2) with nodes 1,2.
 	suite.manager.AddResourceGroup(ctx, "rg1", newResourceGroupConfig(2, 2))
 	for i := int64(1); i <= 2; i++ {
-		suite.manager.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+		suite.nodeMgr.Add(newFakeNodeInfo(fakeImmutableNodeInfo{
 			NodeID:   i,
 			Address:  "localhost",
 			Hostname: "localhost",

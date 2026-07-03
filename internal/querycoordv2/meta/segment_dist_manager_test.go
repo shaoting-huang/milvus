@@ -169,7 +169,7 @@ func (suite *SegmentDistManagerSuite) TestGetBy() {
 	suite.Len(segments, 0)
 
 	// Test GetBy With Wrong Replica
-	replica := newReplica(&querypb.Replica{
+	replica := NewReplica(&querypb.Replica{
 		ID:           1,
 		CollectionID: suite.collection + 1,
 		Nodes:        []int64{suite.nodes[0]},
@@ -178,7 +178,7 @@ func (suite *SegmentDistManagerSuite) TestGetBy() {
 	suite.Len(segments, 0)
 
 	// Test GetBy With Correct Replica
-	replica = newReplica(&querypb.Replica{
+	replica = NewReplica(&querypb.Replica{
 		ID:           1,
 		CollectionID: suite.collection,
 		Nodes:        []int64{suite.nodes[0]},

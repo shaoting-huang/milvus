@@ -14,10 +14,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package meta
+package querycoord
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -29,9 +30,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/rgpb"
-	"github.com/milvus-io/milvus/internal/json"
-	"github.com/milvus-io/milvus/internal/metastore"
-	"github.com/milvus-io/milvus/internal/querycoordv2/session"
+	"github.com/milvus-io/milvus/pkg/v3/metastore"
 	"github.com/milvus-io/milvus/pkg/v3/metrics"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
@@ -54,7 +53,7 @@ type ResourceManager struct {
 	nodeIDMap map[int64]string          // secondary index from node id to resource group
 
 	catalog metastore.QueryCoordCatalog
-	nodeMgr *session.NodeManager // TODO: ResourceManager is watch node status with service discovery, so it can handle node up and down as fast as possible.
+	nodeMgr NodeManager // TODO: ResourceManager is watch node status with service discovery, so it can handle node up and down as fast as possible.
 	// All function can get latest online node without checking with node manager.
 	// so node manager is a redundant type here.
 
@@ -66,7 +65,7 @@ type ResourceManager struct {
 }
 
 // NewResourceManager is used to create a ResourceManager instance.
-func NewResourceManager(catalog metastore.QueryCoordCatalog, nodeMgr *session.NodeManager) *ResourceManager {
+func NewResourceManager(catalog metastore.QueryCoordCatalog, nodeMgr NodeManager) *ResourceManager {
 	groups := make(map[string]*ResourceGroup)
 	// Always create a default resource group to keep compatibility.
 	groups[DefaultResourceGroupName] = NewResourceGroup(DefaultResourceGroupName, newResourceGroupConfig(0, defaultResourceGroupCapacity), nodeMgr)
@@ -908,7 +907,7 @@ func (rm *ResourceManager) assignIncomingNodeWithNodeCheck(ctx context.Context, 
 }
 
 // assignIncomingNode assign node to resource group.
-func (rm *ResourceManager) assignIncomingNode(ctx context.Context, nodeInfo *session.NodeInfo) (string, error) {
+func (rm *ResourceManager) assignIncomingNode(ctx context.Context, nodeInfo NodeInfo) (string, error) {
 	node := nodeInfo.ID()
 
 	// If node already assign to rg.
@@ -934,7 +933,7 @@ func (rm *ResourceManager) assignIncomingNode(ctx context.Context, nodeInfo *ses
 }
 
 // createResourceGroupIfNotExists create resource group if not exists.
-func (rm *ResourceManager) createResourceGroupIfNotExists(ctx context.Context, nodeInfo *session.NodeInfo) error {
+func (rm *ResourceManager) createResourceGroupIfNotExists(ctx context.Context, nodeInfo NodeInfo) error {
 	rgName := nodeInfo.ResourceGroupName()
 	nodeID := nodeInfo.ID()
 	if rgName == "" {
@@ -961,7 +960,7 @@ func (rm *ResourceManager) createResourceGroupIfNotExists(ctx context.Context, n
 }
 
 // mustSelectAssignIncomingNodeTargetRG select resource group for assign incoming node.
-func (rm *ResourceManager) mustSelectAssignIncomingNodeTargetRG(nodeInfo *session.NodeInfo) *ResourceGroup {
+func (rm *ResourceManager) mustSelectAssignIncomingNodeTargetRG(nodeInfo NodeInfo) *ResourceGroup {
 	if nodeInfo.ResourceGroupName() != "" {
 		// rg will be created if not exists by createResourceGroupIfNotExists
 		return rm.groups[nodeInfo.ResourceGroupName()]
@@ -1228,7 +1227,7 @@ func (rm *ResourceManager) CheckNodesInResourceGroup(ctx context.Context) {
 			info := rm.nodeMgr.Get(node)
 			if info == nil {
 				rm.handleNodeDown(ctx, node)
-			} else if info.GetState() == session.NodeStateStopping {
+			} else if info.IsStoppingState() {
 				mlog.Warn(context.TODO(), "node is stopping", mlog.Int64("node", node))
 				rm.handleNodeStopping(ctx, node)
 			} else if info.IsEmbeddedQueryNodeInStreamingNode() {

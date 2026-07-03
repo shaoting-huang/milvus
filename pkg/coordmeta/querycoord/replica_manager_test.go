@@ -14,10 +14,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package meta
+package querycoord
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/cockroachdb/errors"
@@ -25,20 +26,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
-	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
-	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
-	"github.com/milvus-io/milvus/internal/json"
-	etcdkv "github.com/milvus-io/milvus/internal/kv/etcd"
-	"github.com/milvus-io/milvus/internal/metastore"
-	"github.com/milvus-io/milvus/internal/metastore/kv/querycoord"
-	"github.com/milvus-io/milvus/internal/metastore/mocks"
-	. "github.com/milvus-io/milvus/internal/querycoordv2/params"
-	"github.com/milvus-io/milvus/pkg/v3/kv"
+	"github.com/milvus-io/milvus/pkg/v3/metastore/mocks"
 	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
-	"github.com/milvus-io/milvus/pkg/v3/util/etcd"
 	"github.com/milvus-io/milvus/pkg/v3/util/metricsinfo"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
@@ -72,8 +64,7 @@ type ReplicaManagerSuite struct {
 	rgNodes     map[string]typeutil.UniqueSet
 	collections map[int64]collectionLoadConfig
 	idAllocator func() (int64, error)
-	kv          kv.MetaKv
-	catalog     metastore.QueryCoordCatalog
+	catalog     *fakeCatalog
 	mgr         *ReplicaManager
 	ctx         context.Context
 }
@@ -104,27 +95,10 @@ func (suite *ReplicaManagerSuite) SetupSuite() {
 }
 
 func (suite *ReplicaManagerSuite) SetupTest() {
-	var err error
-	config := GenerateEtcdConfig()
-	cli, err := etcd.GetEtcdClient(
-		config.UseEmbedEtcd.GetAsBool(),
-		config.EtcdUseSSL.GetAsBool(),
-		config.Endpoints.GetAsStrings(),
-		config.EtcdTLSCert.GetValue(),
-		config.EtcdTLSKey.GetValue(),
-		config.EtcdTLSCACert.GetValue(),
-		config.EtcdTLSMinVersion.GetValue())
-	suite.Require().NoError(err)
-	suite.kv = etcdkv.NewEtcdKV(cli, config.MetaRootPath.GetValue())
-	suite.catalog = querycoord.NewCatalog(suite.kv)
-
-	suite.idAllocator = RandomIncrementIDAllocator()
+	suite.catalog = newFakeCatalog()
+	suite.idAllocator = randomIncrementIDAllocator()
 	suite.mgr = NewReplicaManager(suite.idAllocator, suite.catalog)
 	suite.spawnAll()
-}
-
-func (suite *ReplicaManagerSuite) TearDownTest() {
-	suite.kv.Close()
 }
 
 func (suite *ReplicaManagerSuite) TestSpawnWithReplicaConfig() {
@@ -167,7 +141,7 @@ func (suite *ReplicaManagerSuite) TestSpawn() {
 	mgr := suite.mgr
 	ctx := suite.ctx
 
-	mgr.idAllocator = ErrorIDAllocator()
+	mgr.idAllocator = errorIDAllocator()
 	_, err := mgr.Spawn(ctx, 1, map[string]int{DefaultResourceGroupName: 1}, nil, commonpb.LoadPriority_LOW)
 	suite.Error(err)
 
@@ -254,15 +228,16 @@ func (suite *ReplicaManagerSuite) TestRecover() {
 	mgr.Recover(ctx, lo.Keys(suite.collections))
 	suite.TestGet()
 
-	// Test recover from 2.1 meta store
-	replicaInfo := milvuspb.ReplicaInfo{
-		ReplicaID:    2100,
+	// Seed a pre-existing persisted replica for another collection and recover it.
+	// (Legacy 2.1 ReplicaInfo parsing is the catalog's own concern, covered by the
+	// catalog tests; here we seed the equivalent persisted querypb.Replica so this
+	// test stays focused on ReplicaManager.Recover picking it up.)
+	err := suite.catalog.SaveReplica(ctx, &querypb.Replica{
+		ID:           2100,
 		CollectionID: 1000,
-		NodeIds:      []int64{1, 2, 3},
-	}
-	value, err := proto.Marshal(&replicaInfo)
+		Nodes:        []int64{1, 2, 3},
+	})
 	suite.NoError(err)
-	suite.kv.Save(ctx, querycoord.ReplicaMetaPrefixV1+"/2100", string(value))
 
 	suite.clearMemory()
 	mgr.Recover(ctx, append(lo.Keys(suite.collections), 1000))
@@ -394,8 +369,7 @@ type ReplicaManagerV2Suite struct {
 	sqNodesByRG     map[string]typeutil.UniqueSet // streaming query nodes grouped by resource group
 	outboundSQNodes []int64
 	collections     map[int64]collectionLoadConfig
-	kv              kv.MetaKv
-	catalog         metastore.QueryCoordCatalog
+	catalog         *fakeCatalog
 	mgr             *ReplicaManager
 	ctx             context.Context
 }
@@ -437,27 +411,13 @@ func (suite *ReplicaManagerV2Suite) SetupSuite() {
 		},
 	}
 
-	var err error
-	config := GenerateEtcdConfig()
-	cli, err := etcd.GetEtcdClient(
-		config.UseEmbedEtcd.GetAsBool(),
-		config.EtcdUseSSL.GetAsBool(),
-		config.Endpoints.GetAsStrings(),
-		config.EtcdTLSCert.GetValue(),
-		config.EtcdTLSKey.GetValue(),
-		config.EtcdTLSCACert.GetValue(),
-		config.EtcdTLSMinVersion.GetValue())
-	suite.Require().NoError(err)
-	suite.kv = etcdkv.NewEtcdKV(cli, config.MetaRootPath.GetValue())
-	suite.catalog = querycoord.NewCatalog(suite.kv)
-
-	idAllocator := RandomIncrementIDAllocator()
+	suite.catalog = newFakeCatalog()
+	idAllocator := randomIncrementIDAllocator()
 	suite.mgr = NewReplicaManager(idAllocator, suite.catalog)
 	suite.ctx = context.Background()
 }
 
 func (suite *ReplicaManagerV2Suite) TearDownSuite() {
-	suite.kv.Close()
 }
 
 func (suite *ReplicaManagerV2Suite) TestSpawn() {
@@ -630,7 +590,7 @@ func TestSQNodeResourceGroupIsolation(t *testing.T) {
 	catalog.On("SaveReplica", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	catalog.On("SaveReplica", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	catalog.On("SaveReplica", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
-	idAllocator := RandomIncrementIDAllocator()
+	idAllocator := randomIncrementIDAllocator()
 	mgr := NewReplicaManager(idAllocator, catalog)
 	ctx := context.Background()
 
@@ -804,7 +764,7 @@ func TestSQNodeRecoveryWithRONodes(t *testing.T) {
 	catalog.EXPECT().SaveReplica(mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	catalog.EXPECT().SaveReplica(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
-	idAllocator := RandomIncrementIDAllocator()
+	idAllocator := randomIncrementIDAllocator()
 	mgr := NewReplicaManager(idAllocator, catalog)
 	ctx := context.Background()
 
@@ -850,7 +810,7 @@ func TestSQNodeRecoveryWithUnrecoverableNodes(t *testing.T) {
 	catalog.EXPECT().SaveReplica(mock.Anything, mock.Anything).Return(nil)
 	catalog.EXPECT().SaveReplica(mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
-	idAllocator := RandomIncrementIDAllocator()
+	idAllocator := randomIncrementIDAllocator()
 	mgr := NewReplicaManager(idAllocator, catalog)
 	ctx := context.Background()
 
@@ -892,7 +852,7 @@ func TestReplicaManager(t *testing.T) {
 func TestGetReplicasJSON(t *testing.T) {
 	catalog := mocks.NewQueryCoordCatalog(t)
 	catalog.EXPECT().SaveReplica(mock.Anything, mock.Anything).Return(nil)
-	idAllocator := RandomIncrementIDAllocator()
+	idAllocator := randomIncrementIDAllocator()
 	replicaManager := NewReplicaManager(idAllocator, catalog)
 	ctx := context.Background()
 
@@ -916,11 +876,11 @@ func TestGetReplicasJSON(t *testing.T) {
 	err = replicaManager.Put(ctx, replica2)
 	assert.NoError(t, err)
 
-	meta := &Meta{
-		CollectionManager: NewCollectionManager(catalog),
-	}
+	// The CollectionManager acts as the ReplicaCollectionProvider (the reverse
+	// *Meta lookup GetReplicasJSON needs to resolve each replica's database id).
+	collectionProvider := NewCollectionManager(catalog)
 
-	err = meta.PutCollectionWithoutSave(ctx, &Collection{
+	err = collectionProvider.PutCollectionWithoutSave(ctx, &Collection{
 		CollectionLoadInfo: &querypb.CollectionLoadInfo{
 			CollectionID: 100,
 			DbID:         int64(1),
@@ -928,14 +888,14 @@ func TestGetReplicasJSON(t *testing.T) {
 	})
 	assert.NoError(t, err)
 
-	err = meta.PutCollectionWithoutSave(ctx, &Collection{
+	err = collectionProvider.PutCollectionWithoutSave(ctx, &Collection{
 		CollectionLoadInfo: &querypb.CollectionLoadInfo{
 			CollectionID: 200,
 		},
 	})
 	assert.NoError(t, err)
 
-	jsonOutput := replicaManager.GetReplicasJSON(ctx, meta)
+	jsonOutput := replicaManager.GetReplicasJSON(ctx, collectionProvider)
 	var replicas []*metricsinfo.Replica
 	err = json.Unmarshal([]byte(jsonOutput), &replicas)
 	assert.NoError(t, err)
@@ -969,7 +929,7 @@ func TestReplicaManagerCollectionViewAfterPartialUpdateAndRemove(t *testing.T) {
 	catalog.EXPECT().SaveReplica(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	catalog.EXPECT().SaveReplica(mock.Anything, mock.Anything).Return(nil).Maybe()
 	catalog.EXPECT().ReleaseReplica(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
-	idAllocator := RandomIncrementIDAllocator()
+	idAllocator := randomIncrementIDAllocator()
 	mgr := NewReplicaManager(idAllocator, catalog)
 	ctx := context.Background()
 
@@ -1005,7 +965,7 @@ func TestReplicaManagerCollectionViewAfterPartialUpdateAndRemove(t *testing.T) {
 func TestReplicaManagerPutMaintainsIndexesAcrossCollections(t *testing.T) {
 	catalog := mocks.NewQueryCoordCatalog(t)
 	catalog.EXPECT().SaveReplica(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
-	idAllocator := RandomIncrementIDAllocator()
+	idAllocator := randomIncrementIDAllocator()
 	mgr := NewReplicaManager(idAllocator, catalog)
 	ctx := context.Background()
 
@@ -1039,7 +999,7 @@ func TestReplicaManagerPutCrossCollectionPersistErrorIsAtomic(t *testing.T) {
 	catalog := mocks.NewQueryCoordCatalog(t)
 	saveErr := errors.New("save failed")
 	catalog.EXPECT().SaveReplica(mock.Anything, mock.Anything, mock.Anything).Return(saveErr).Once()
-	mgr := NewReplicaManager(RandomIncrementIDAllocator(), catalog)
+	mgr := NewReplicaManager(randomIncrementIDAllocator(), catalog)
 	ctx := context.Background()
 
 	replica1 := newReplica(&querypb.Replica{
@@ -1142,7 +1102,7 @@ func TestReplicaManagerPersistErrorPaths(t *testing.T) {
 func TestReplicaManagerSpawnWaitRGReadyRecovery(t *testing.T) {
 	catalog := mocks.NewQueryCoordCatalog(t)
 	catalog.EXPECT().SaveReplica(mock.Anything, mock.Anything).Return(nil).Twice()
-	mgr := NewReplicaManager(RandomIncrementIDAllocator(), catalog)
+	mgr := NewReplicaManager(randomIncrementIDAllocator(), catalog)
 	ctx := context.Background()
 	collID := int64(10)
 

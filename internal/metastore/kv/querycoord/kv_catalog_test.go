@@ -9,7 +9,9 @@ import (
 	"github.com/samber/lo"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
+	"google.golang.org/protobuf/proto"
 
+	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
 	etcdkv "github.com/milvus-io/milvus/internal/kv/etcd"
 	"github.com/milvus-io/milvus/internal/kv/mocks"
 	. "github.com/milvus-io/milvus/internal/querycoordv2/params"
@@ -218,6 +220,37 @@ func (suite *CatalogTestSuite) TestReplica() {
 	replicas, err := suite.catalog.GetReplicas(ctx)
 	suite.NoError(err)
 	suite.Len(replicas, 1)
+}
+
+// TestReplicaV1Recovery covers getReplicasFromV1: the 2.1 -> 2.2 rolling-upgrade
+// path where replicas were persisted as milvuspb.ReplicaInfo under the legacy
+// ReplicaMetaPrefixV1 prefix. GetReplicas must parse those records and map the
+// legacy fields onto querypb.Replica (ReplicaID -> ID, NodeIds -> Nodes,
+// CollectionID -> CollectionID).
+func (suite *CatalogTestSuite) TestReplicaV1Recovery() {
+	ctx := context.Background()
+
+	// Persist a replica in the legacy 2.1 format (milvuspb.ReplicaInfo) directly
+	// under the V1 prefix, exactly as an upgraded-from-2.1 cluster would have it.
+	legacy := &milvuspb.ReplicaInfo{
+		ReplicaID:    2100,
+		CollectionID: 1000,
+		NodeIds:      []int64{1, 2, 3},
+	}
+	value, err := proto.Marshal(legacy)
+	suite.NoError(err)
+	err = suite.kv.Save(ctx, ReplicaMetaPrefixV1+"/2100", string(value))
+	suite.NoError(err)
+
+	replicas, err := suite.catalog.GetReplicas(ctx)
+	suite.NoError(err)
+	suite.Len(replicas, 1)
+
+	recovered := replicas[0]
+	// Field mapping: ReplicaID -> ID, CollectionID -> CollectionID, NodeIds -> Nodes.
+	suite.EqualValues(2100, recovered.GetID())
+	suite.EqualValues(1000, recovered.GetCollectionID())
+	suite.ElementsMatch([]int64{1, 2, 3}, recovered.GetNodes())
 }
 
 func (suite *CatalogTestSuite) TestResourceGroup() {

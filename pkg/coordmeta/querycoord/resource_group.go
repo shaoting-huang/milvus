@@ -1,10 +1,9 @@
-package meta
+package querycoord
 
 import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/rgpb"
-	"github.com/milvus-io/milvus/internal/querycoordv2/session"
 	"github.com/milvus-io/milvus/pkg/v3/common"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
@@ -38,11 +37,11 @@ type ResourceGroup struct {
 	name    string
 	nodes   typeutil.UniqueSet
 	cfg     *rgpb.ResourceGroupConfig
-	nodeMgr *session.NodeManager
+	nodeMgr NodeManager
 }
 
 // NewResourceGroup create resource group.
-func NewResourceGroup(name string, cfg *rgpb.ResourceGroupConfig, nodeMgr *session.NodeManager) *ResourceGroup {
+func NewResourceGroup(name string, cfg *rgpb.ResourceGroupConfig, nodeMgr NodeManager) *ResourceGroup {
 	rg := &ResourceGroup{
 		name:    name,
 		nodes:   typeutil.NewUniqueSet(),
@@ -53,7 +52,7 @@ func NewResourceGroup(name string, cfg *rgpb.ResourceGroupConfig, nodeMgr *sessi
 }
 
 // NewResourceGroupFromMeta create resource group from meta.
-func NewResourceGroupFromMeta(meta *querypb.ResourceGroup, nodeMgr *session.NodeManager) *ResourceGroup {
+func NewResourceGroupFromMeta(meta *querypb.ResourceGroup, nodeMgr NodeManager) *ResourceGroup {
 	// Backward compatibility, recover the config from capacity.
 	if meta.Config == nil {
 		// If meta.Config is nil, which means the meta is from old version.
