@@ -12,12 +12,12 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
-	etcdkv "github.com/milvus-io/milvus/internal/kv/etcd"
-	"github.com/milvus-io/milvus/internal/kv/mocks"
-	. "github.com/milvus-io/milvus/internal/querycoordv2/params"
 	"github.com/milvus-io/milvus/pkg/v3/kv"
+	etcdkv "github.com/milvus-io/milvus/pkg/v3/kv/etcd"
+	"github.com/milvus-io/milvus/pkg/v3/kv/mocks"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/util/etcd"
+	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
 
@@ -33,7 +33,7 @@ func (suite *CatalogTestSuite) SetupSuite() {
 }
 
 func (suite *CatalogTestSuite) SetupTest() {
-	config := GenerateEtcdConfig()
+	config := &paramtable.Get().EtcdCfg
 	cli, err := etcd.GetEtcdClient(
 		config.UseEmbedEtcd.GetAsBool(),
 		config.EtcdUseSSL.GetAsBool(),
@@ -43,12 +43,14 @@ func (suite *CatalogTestSuite) SetupTest() {
 		config.EtcdTLSCACert.GetValue(),
 		config.EtcdTLSMinVersion.GetValue())
 	suite.Require().NoError(err)
-	suite.kv = etcdkv.NewEtcdKV(cli, config.MetaRootPath.GetValue())
+	rootPath := "test-querycoord-catalog-" + funcutil.RandomString(8)
+	suite.kv = etcdkv.NewEtcdKV(cli, rootPath)
 	suite.catalog = NewCatalog(suite.kv)
 }
 
 func (suite *CatalogTestSuite) TearDownTest() {
 	if suite.kv != nil {
+		suite.kv.RemoveWithPrefix(context.Background(), "")
 		suite.kv.Close()
 	}
 }
