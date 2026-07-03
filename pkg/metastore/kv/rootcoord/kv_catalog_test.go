@@ -2,6 +2,7 @@ package rootcoord
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/rand"
 	"os"
@@ -20,13 +21,12 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
-	"github.com/milvus-io/milvus/internal/json"
-	etcdkv "github.com/milvus-io/milvus/internal/kv/etcd"
-	"github.com/milvus-io/milvus/internal/kv/mocks"
-	"github.com/milvus-io/milvus/internal/metastore"
-	"github.com/milvus-io/milvus/internal/metastore/model"
 	"github.com/milvus-io/milvus/pkg/v3/common"
+	etcdkv "github.com/milvus-io/milvus/pkg/v3/kv/etcd"
+	"github.com/milvus-io/milvus/pkg/v3/kv/mocks"
 	"github.com/milvus-io/milvus/pkg/v3/kv/predicates"
+	"github.com/milvus-io/milvus/pkg/v3/metastore"
+	"github.com/milvus-io/milvus/pkg/v3/metastore/model"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	pb "github.com/milvus-io/milvus/pkg/v3/proto/etcdpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
@@ -46,19 +46,6 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	os.Exit(code)
 }
-
-var (
-	indexName = "idx"
-	IndexID   = 1
-	index     = model.Index{
-		CollectionID: 1,
-		IndexName:    indexName,
-		IndexID:      1,
-		FieldID:      1,
-		IndexParams:  []*commonpb.KeyValuePair{{Key: common.IndexTypeKey, Value: "STL_SORT"}},
-		IsDeleted:    true,
-	}
-)
 
 const (
 	testDb = 1000

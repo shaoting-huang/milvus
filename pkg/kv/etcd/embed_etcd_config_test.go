@@ -24,26 +24,27 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	embed_etcd_kv "github.com/milvus-io/milvus/internal/kv/etcd"
+	embed_etcd_kv "github.com/milvus-io/milvus/pkg/v3/kv/etcd"
 	"github.com/milvus-io/milvus/pkg/v3/util/metricsinfo"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
 
-func TestEtcdRestartLoad(te *testing.T) {
-	etcdDataDir := "/tmp/_etcd_data"
+func TestEtcdConfigLoad(te *testing.T) {
 	te.Setenv(metricsinfo.DeployModeEnvKey, metricsinfo.StandaloneDeployMode)
-	te.Setenv("ETCD_USE_EMBED", "true")
 	param := new(paramtable.ComponentParam)
+
+	te.Setenv("etcd.use.embed", "true")
+	te.Setenv("etcd.auth.enabled", "false") // embedded etcd does not support auth
+	te.Setenv("etcd.config.path", "../../../configs/advanced/etcd.yaml")
+	te.Setenv("etcd.data.dir", "etcd.test.data.dir")
+
 	param.Init(paramtable.NewBaseTable())
-	param.Save("etcd.config.path", "../../../configs/advanced/etcd.yaml")
-	param.Save("etcd.data.dir", etcdDataDir)
 	// clean up data
 	defer func() {
-		err := os.RemoveAll(etcdDataDir)
-		assert.NoError(te, err)
+		os.RemoveAll("etcd.test.data.dir")
 	}()
-	te.Run("etcdKV SaveRestartAndLoad", func(t *testing.T) {
-		rootPath := "/etcd/test/root/saveRestartAndLoad"
+	te.Run("Etcd Config", func(t *testing.T) {
+		rootPath := "/test"
 		metaKv, err := embed_etcd_kv.NewMetaKvFactory(rootPath, &param.EtcdCfg)
 		require.NoError(te, err)
 		assert.NotNil(te, metaKv)
@@ -52,43 +53,8 @@ func TestEtcdRestartLoad(te *testing.T) {
 		defer metaKv.Close()
 		defer metaKv.RemoveWithPrefix(context.TODO(), "")
 
-		saveAndLoadTests := []struct {
-			key   string
-			value string
-		}{
-			{"test1", "value1"},
-			{"test2", "value2"},
-			{"test1/a", "value_a"},
-			{"test1/b", "value_b"},
-		}
-
-		// save some data
-		for i, test := range saveAndLoadTests {
-			if i < 4 {
-				err = metaKv.Save(context.TODO(), test.key, test.value)
-				assert.NoError(t, err)
-			}
-		}
-
-		// check test result
-		for _, test := range saveAndLoadTests {
-			val, err := metaKv.Load(context.TODO(), test.key)
-			assert.NoError(t, err)
-			assert.Equal(t, test.value, val)
-		}
-
-		embed := metaKv.(*embed_etcd_kv.EmbedEtcdKV)
-		embed.Close()
-
-		// restart and check test result
-		metaKv, _ = embed_etcd_kv.NewMetaKvFactory(rootPath, &param.EtcdCfg)
-
-		for _, test := range saveAndLoadTests {
-			val, err := metaKv.Load(context.TODO(), test.key)
-			assert.NoError(t, err)
-			assert.Equal(t, test.value, val)
-		}
-
-		metaKv.Close()
+		kv := metaKv.(*embed_etcd_kv.EmbedEtcdKV)
+		assert.Equal(t, kv.GetConfig().SnapshotCount, uint64(1000))
+		assert.Equal(t, kv.GetConfig().MaxWalFiles, uint(10))
 	})
 }

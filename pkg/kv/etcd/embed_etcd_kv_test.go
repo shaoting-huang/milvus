@@ -29,8 +29,8 @@ import (
 	"github.com/stretchr/testify/suite"
 	"golang.org/x/exp/maps"
 
-	embed_etcd_kv "github.com/milvus-io/milvus/internal/kv/etcd"
 	"github.com/milvus-io/milvus/pkg/v3/kv"
+	embed_etcd_kv "github.com/milvus-io/milvus/pkg/v3/kv/etcd"
 	"github.com/milvus-io/milvus/pkg/v3/kv/predicates"
 	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/metricsinfo"

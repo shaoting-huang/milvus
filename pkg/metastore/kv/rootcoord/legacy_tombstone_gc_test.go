@@ -11,9 +11,9 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	etcdkv "github.com/milvus-io/milvus/internal/kv/etcd"
-	"github.com/milvus-io/milvus/internal/kv/mocks"
 	"github.com/milvus-io/milvus/pkg/v3/kv"
+	etcdkv "github.com/milvus-io/milvus/pkg/v3/kv/etcd"
+	"github.com/milvus-io/milvus/pkg/v3/kv/mocks"
 	"github.com/milvus-io/milvus/pkg/v3/util/etcd"
 )
 
